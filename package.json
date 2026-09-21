@@ -1,0 +1,23 @@
+{
+  "name": "nexora-xau-paper-terminal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.14.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.mjs",
+    "backup": "node src/maintenance.mjs backup",
+    "restore": "node src/maintenance.mjs restore",
+    "research-hash": "node src/research-cli.mjs hash",
+    "evaluate": "node src/research-cli.mjs evaluate",
+    "test:smoke": "node --test test/api.test.mjs test/startup.test.mjs",
+    "test:unit": "node --test test/domain.test.mjs test/statistics.test.mjs",
+    "test:integration": "node --test test/maintenance.test.mjs test/lifecycle.test.mjs test/scan-correlation.test.mjs test/worker.test.mjs test/research-evaluation.test.mjs test/telegram.test.mjs test/migration.test.mjs",
+    "test:recovery": "node --test test/recovery.test.mjs",
+    "test:security": "node --test test/security.test.mjs",
+    "test": "node --test test/api.test.mjs test/domain.test.mjs test/maintenance.test.mjs test/lifecycle.test.mjs test/scan-correlation.test.mjs test/worker.test.mjs test/statistics.test.mjs test/research-evaluation.test.mjs test/recovery.test.mjs test/startup.test.mjs test/telegram.test.mjs test/security.test.mjs test/migration.test.mjs",
+    "check": "node --check src/config.mjs && node --check src/server.mjs && node --check src/worker.mjs && node --check src/services/paper-lifecycle-service.mjs && node --check src/services/risk-state-service.mjs && node --check src/services/research-service.mjs && node --check src/services/telegram-service.mjs && node --check dist/app.js && node --check src/maintenance.mjs && node --check src/domain/research-evaluation.mjs && node --check src/research-cli.mjs && node --check test/crash-recovery-child.mjs && node --check test/telegram.test.mjs && node --check test/security.test.mjs && node --check test/migration.test.mjs"
+  }
+}

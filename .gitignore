@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+vendor/
+.venv/
+venv/
+
+# Build output
+dist/
+build/
+out/
+data/
+backups/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.log
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
