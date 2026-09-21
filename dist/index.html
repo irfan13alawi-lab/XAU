@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#080d16" />
+    <meta name="description" content="NEXORA local-first XAUUSD paper trading control room. Live orders are disabled." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css?v=9" />
+    <title>NEXORA XAU FOREX AUTO TRADING</title>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar" aria-label="Primary navigation">
+        <div class="brand-block">
+          <div class="brand-mark">N<span>+</span></div>
+          <div>
+            <div class="brand-name">NEXORA</div>
+            <div class="brand-sub">XAU / FOREX CONTROL</div>
+          </div>
+        </div>
+
+        <div class="side-label">WORKSPACE</div>
+        <nav class="nav-list">
+          <button class="nav-item active" data-section="overview"><span class="nav-icon">◈</span><span>Overview</span></button>
+          <button class="nav-item" data-section="signals"><span class="nav-icon">⌁</span><span>Signal Lab</span></button>
+          <button class="nav-item" data-section="journal"><span class="nav-icon">▤</span><span>Trade Journal</span></button>
+          <button class="nav-item" data-section="risk"><span class="nav-icon">◒</span><span>Risk &amp; Guards</span></button>
+        </nav>
+
+        <div class="side-label side-label-lower">SYSTEM</div>
+        <div class="system-links">
+          <div class="nav-item muted"><span class="nav-icon">◉</span><span>Broker: not configured</span></div>
+          <div class="nav-item muted"><span class="nav-icon">⌘</span><span>Audit: local SQLite</span></div>
+            <div class="nav-item muted"><span class="nav-icon">➤</span><span id="telegramStatus">Telegram: disabled</span></div>
+        </div>
+
+        <div class="sidebar-footer">
+          <div class="build-line"><span class="status-dot amber" id="sidebarStatusDot"></span><span id="sidebarStatus">Connecting to local service</span></div>
+          <div class="build-id mono" id="buildInfo">BUILD — · SCHEMA —</div>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <header class="topbar">
+          <div class="crumbs"><span>Control room</span><span class="slash">/</span><strong id="pageTitle">Overview</strong></div>
+          <div class="top-actions">
+            <div class="server-time"><span class="status-dot amber" id="apiStatusDot"></span><span id="apiStatusLabel">LOCAL SERVICE</span><strong id="serverClock">—</strong></div>
+            <span class="status-pill gray-pill" id="liveBadge">LIVE DISABLED</span>
+          </div>
+        </header>
+
+        <div class="content-wrap">
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">XAUUSD / PAPER CONTROL ROOM</p>
+              <h1>Trading status</h1>
+              <p class="heading-copy">Entries stay blocked until broker data, risk, and news checks are verified.</p>
+            </div>
+            <div class="heading-actions">
+              <button class="secondary-button" id="scanButton" disabled><span class="scan-glyph">✦</span> Run M15 scan</button>
+              <button class="primary-button paused" id="pauseButton" disabled><span class="pause-icon">Ⅱ</span> Entries paused</button>
+              <button class="secondary-button" id="paperModeButton" disabled>Paper mode: ON</button>
+              <div class="operator-access" role="group" aria-label="Local operator authorization">
+                <input id="operatorToken" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Local control token" aria-label="Local control token" disabled />
+                <button class="secondary-button" id="operatorAuthButton" type="button" disabled>Unlock controls</button>
+                <small id="operatorAuthStatus">Local token not configured</small>
+              </div>
+            </div>
+          </div>
+
+          <section class="safety-banner" aria-label="Trading safety status">
+            <div class="safety-symbol">!</div>
+            <div class="safety-copy"><strong id="safetyTitle">LIVE TRADING DISABLED</strong><span id="safetyMessage">No live-order adapter is installed. This workspace is paper-only.</span></div>
+            <div class="safety-meta"><span class="status-dot amber"></span><span id="safetyState">FAIL-CLOSED</span></div>
+          </section>
+
+          <section class="metric-grid" aria-label="Account snapshot">
+            <article class="metric-card">
+              <div class="metric-top"><span>Paper balance</span><span class="metric-kicker" id="accountCurrencyKicker">—</span></div>
+              <div class="metric-value" data-metric="balance">—</div>
+              <div class="metric-foot neutral">No verified account snapshot</div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-top"><span>Daily PnL</span><span class="metric-kicker">TODAY</span></div>
+              <div class="metric-value" data-metric="daily-pnl">—</div>
+              <div class="metric-foot neutral">No closed paper trades</div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-top"><span>Current drawdown</span><span class="metric-kicker" id="drawdownWarningThreshold">WARNING —</span></div>
+              <div class="metric-value" data-metric="drawdown">—</div>
+              <div class="metric-foot neutral">Unavailable until equity snapshots exist</div>
+            </article>
+            <article class="metric-card">
+              <div class="metric-top"><span>Open positions</span><span class="metric-kicker">PAPER</span></div>
+              <div class="metric-value" data-metric="positions">0</div>
+              <div class="metric-foot neutral" id="pendingCount">0 pending orders</div>
+            </article>
+          </section>
+
+          <section class="hero-grid" data-section-panel="overview">
+            <article class="panel market-panel">
+              <div class="panel-header">
+                <div class="panel-title"><span class="instrument-icon">Au</span><div><h2>XAUUSD <span class="status-pill gray-pill" id="marketBadge">NO FEED</span></h2><p id="marketSource">No broker selected · market values unavailable</p></div></div>
+                <div class="chart-controls" role="group" aria-label="Chart timeframe">
+                  <button class="chart-tab active" data-timeframe="M15">15M</button><button class="chart-tab" data-timeframe="M30">30M</button><button class="chart-tab" data-timeframe="H1">1H</button><button class="chart-tab" data-timeframe="H4">4H</button>
+                </div>
+              </div>
+              <div class="quote-row">
+                <div class="last-price" data-market="last">—</div>
+                <div class="price-change neutral" data-market="change">No verified quote</div>
+                <div class="quote-split"><span>Bid <b data-market="bid">—</b></span><span>Ask <b data-market="ask">—</b></span><span>Spread <b data-market="spread">—</b></span></div>
+              </div>
+              <div class="chart-area chart-empty-area" id="chartArea">
+                <div class="chart-empty" id="chartEmpty">Connect a verified market-data feed to display candles.</div>
+                <div class="chart-y-labels" id="chartYLabels" hidden></div>
+                <svg id="priceChart" class="price-chart" viewBox="0 0 860 300" role="img" aria-label="Verified broker candle chart unavailable" hidden></svg>
+                <div class="chart-x-labels" id="chartXLabels" hidden></div>
+              </div>
+              <div class="chart-legend"><span><i class="legend-line fast"></i> EMA 9</span><span><i class="legend-line slow"></i> EMA 21</span><span class="chart-note" id="candleTimestamp">No closed candle received</span></div>
+              <div class="market-facts"><span>ATR(14) <b id="marketAtr">UNAVAILABLE</b></span><span>UTC day high / low <b id="marketDayRange">UNAVAILABLE</b></span><span>Tick volume / ratio <b id="marketVolume">UNAVAILABLE</b></span><span>Candle freshness <b data-market="freshness">UNAVAILABLE</b></span></div>
+              <div class="market-facts"><span>Volatility <b id="volatilityBucket">UNAVAILABLE</b></span><span>FX sessions <b id="marketSession">UNAVAILABLE</b></span><span>Verified candles <b id="candleCount">0 / 100</b></span><span>Session basis <b>Indicative · broker hours unknown</b></span></div>
+            </article>
+
+            <article class="panel engine-panel">
+              <div class="panel-header"><div><p class="eyebrow">AUTOMATION STATE</p><h2>Paper engine</h2></div><div class="engine-state-flags" aria-label="Paper mode and engine readiness"><span class="mode-pill" id="botState">BROKER OFFLINE</span><span class="mode-pill" id="paperModeState">PAPER MODE UNKNOWN</span></div></div>
+              <div class="engine-orbit"><div class="orbit-ring ring-one"></div><div class="orbit-ring ring-two"></div><div class="orbit-core"><span>NX</span><small id="engineCoreState">BLOCKED</small></div><div class="orbit-node node-a">M15</div><div class="orbit-node node-b">RISK</div><div class="orbit-node node-c">NEWS</div></div>
+              <div class="engine-status"><div><span class="status-dot amber" id="workerDot"></span><span id="workerState">Worker starting</span></div><strong id="scanStatus">Waiting for verified data</strong></div>
+              <div class="engine-list">
+                <div><span>Broker connection</span><strong class="warning-text" id="brokerHealth">OFFLINE</strong></div>
+                <div><span>Worker trend · last hour</span><strong id="workerTrend">No retained cycles yet</strong></div>
+                <div><span>Worker heartbeat</span><strong id="workerHeartbeat">—</strong></div>
+                <div><span>Latest worker cycle</span><strong id="workerLatency">Telemetry unavailable</strong></div>
+                <div><span>Pending setups</span><strong id="pendingSetups">0</strong></div>
+                <div><span>News calendar</span><strong class="warning-text" id="newsHealth">UNAVAILABLE · ENTRY BLOCKED</strong></div>
+              </div>
+              <div class="engine-actions"><span class="text-button" id="entryPolicy">New entries require fresh broker data</span><span class="mono engine-version" id="strategyVersion">mtf-paper-v1</span></div>
+            </article>
+          </section>
+
+          <section class="dashboard-grid" data-section-panel="overview">
+            <article class="panel confluence-panel">
+              <div class="panel-header"><div><p class="eyebrow">SIGNAL ENGINE</p><h2>MTF confluence gate</h2></div><div class="score-badge"><span>SCORE · CONFIGURED WEIGHTS</span><strong id="confluenceScore">—/100</strong><small id="confluencePct">—% aligned</small></div></div>
+              <div class="gate-summary"><div class="direction-lock"><span class="direction-arrow" aria-hidden="true">—</span><div><strong id="gateDirection">NO BIAS</strong><span id="gateCount">0 of 4 timeframes available</span></div></div><div class="gate-result"><span class="status-dot amber" id="gateDot"></span><strong id="gateResult">ENTRY BLOCKED</strong><small id="gateReason">No complete, fresh candle set</small></div></div>
+              <div class="timeframe-list">
+                <div class="timeframe-row"><span class="tf-name">H4</span><span class="tf-direction neutral">—</span><div class="tf-track"><span style="width:0%"></span></div><span class="tf-score">—</span><span class="tf-reason">Data unavailable</span><span class="wait">…</span></div>
+                <div class="timeframe-row"><span class="tf-name">H1</span><span class="tf-direction neutral">—</span><div class="tf-track"><span style="width:0%"></span></div><span class="tf-score">—</span><span class="tf-reason">Data unavailable</span><span class="wait">…</span></div>
+                <div class="timeframe-row"><span class="tf-name">M30</span><span class="tf-direction neutral">—</span><div class="tf-track"><span style="width:0%"></span></div><span class="tf-score">—</span><span class="tf-reason">Data unavailable</span><span class="wait">…</span></div>
+                <div class="timeframe-row muted-row"><span class="tf-name">M15</span><span class="tf-direction neutral">—</span><div class="tf-track"><span style="width:0%"></span></div><span class="tf-score">—</span><span class="tf-reason">Data unavailable</span><span class="wait">…</span></div>
+              </div>
+              <div class="confluence-foot"><span><i class="tiny-dot amber"></i> <span id="dataGate">Data unavailable</span></span><span><i class="tiny-dot amber"></i> <span id="newsGate">News unknown</span></span><span><i class="tiny-dot amber"></i> <span id="riskGate">Entry held</span></span></div>
+            </article>
+
+            <article class="panel risk-panel">
+              <div class="panel-header"><div><p class="eyebrow">CAPITAL PROTECTION</p><h2>Risk guard</h2></div><span class="guard-chip"><span class="status-dot amber"></span><span id="riskState">ENTRY BLOCKED</span></span></div>
+              <div class="risk-meter"><div class="risk-meter-top"><span>Daily loss used</span><strong id="dailyRiskUsed">— <small>/ 3.00R</small></strong></div><div class="risk-meter-track"><span style="width:0%"></span><i style="left:75%"></i></div><div class="risk-meter-labels"><span>0R</span><span>warning 2R</span><span>pause 3R</span></div></div>
+              <div class="risk-stat-grid"><div><span>Open risk</span><strong id="openRisk">—</strong></div><div><span>Max total</span><strong id="maxTotalRisk">5.00%</strong></div><div><span>DD pause</span><strong id="maxDrawdown">10.00%</strong></div><div><span>Paper risk</span><strong id="riskPerTrade">0.25%</strong></div></div>
+              <div class="risk-state-meta" id="riskFreshness">Risk data freshness unavailable</div>
+              <div class="guard-list"><div><span class="guard-icon warn">!</span><span>Daily loss guard</span><strong id="dailyLossGuard">UNKNOWN</strong></div><div><span class="guard-icon warn">!</span><span>Drawdown pause</span><strong id="drawdownGuard">UNKNOWN</strong></div><div><span class="guard-icon ok">✓</span><span>Live order route</span><strong>DISABLED</strong></div></div>
+            </article>
+          </section>
+
+          <section class="lower-grid" data-section-panel="overview">
+            <article class="panel positions-panel">
+              <div class="panel-header"><div><p class="eyebrow">EXECUTION MONITOR</p><h2>Paper positions &amp; orders</h2></div><button class="ghost-button" id="refreshButton">Refresh <span aria-hidden="true">↻</span></button></div>
+              <div class="table-wrap"><table><thead><tr><th>Instrument</th><th>Side</th><th>Entry / Mark</th><th>SL / TP1</th><th>Size</th><th>PnL</th><th>Action</th></tr></thead><tbody id="positionRows"><tr><td colspan="7" class="empty-table">No persisted paper positions or pending orders.</td></tr></tbody></table></div>
+              <div class="table-foot"><span id="positionFoot">0 active records · live execution unavailable</span></div>
+            </article>
+
+            <article class="panel audit-panel">
+              <div class="panel-header"><div><p class="eyebrow">APPEND-ONLY FEED</p><h2>Audit activity</h2></div><span class="status-pill gray-pill" id="auditBadge">LOCAL</span></div>
+              <div class="audit-list" id="auditList"><div class="empty-state">Waiting for service events.</div></div>
+            </article>
+          </section>
+
+          <section class="secondary-section" data-section-panel="signals">
+            <div class="section-intro"><p class="eyebrow">SIGNAL LAB</p><h2>Signal inspection</h2><p>Only closed candles with verified source and freshness can enter the deterministic H4 → H1 → M30 → M15 gate.</p></div>
+            <div class="signal-cards" id="signalCards"><div class="empty-state">No validated scan is available. Synthetic examples are not shown as market signals.</div></div>
+          </section>
+
+          <section class="secondary-section" data-section-panel="journal">
+            <div class="section-intro"><p class="eyebrow">TRADE JOURNAL</p><h2>Performance snapshot</h2><p>Performance metrics remain hidden until at least 30 closed paper trades are persisted. No sample trades are seeded.</p></div>
+            <article class="research-panel">
+              <div class="research-heading"><div><p class="eyebrow">OFFLINE EVALUATION</p><h3>Walk-forward research</h3><p>Replay a verified broker-history JSON file through the paper rules. It cannot send orders.</p></div><span class="status-pill gray-pill">LIVE DISABLED</span></div>
+              <div class="research-controls">
+                <label for="researchDatasetName">Dataset filename</label>
+                <input id="researchDatasetName" type="text" inputmode="text" autocomplete="off" spellcheck="false" placeholder="xau-history.json" aria-describedby="researchDatasetHelp" />
+                <button class="secondary-button" id="researchButton" type="button" disabled>Run walk-forward</button>
+                <small id="researchDatasetHelp">Put the verified JSON file in <code>data/research-datasets</code>. Default: 3 chronological folds, 70% warm-up, 100 minimum training bars.</small>
+              </div>
+              <div class="research-result" id="researchResult" role="status" aria-live="polite">No evaluation result shown. Saved reports stay local; owner-supplied history is not independently verified.</div>
+            </article>
+            <div class="journal-grid" id="journalMetrics"><div class="journal-stat"><span>Closed trades</span><strong>0</strong><small>local database</small></div><div class="journal-stat"><span>Win rate</span><strong>—</strong><small>insufficient sample</small></div><div class="journal-stat"><span>Profit factor</span><strong>—</strong><small>insufficient sample</small></div><div class="journal-stat"><span>Expectancy</span><strong>—</strong><small>insufficient sample</small></div></div>
+            <div class="journal-slices" id="journalSlices" aria-live="polite"><div class="empty-state">Cohort breakdowns appear as paper trades are recorded.</div></div>
+          </section>
+
+          <section class="secondary-section" data-section-panel="risk">
+            <div class="section-intro"><p class="eyebrow">RISK &amp; GUARDS</p><h2>Readiness evidence</h2><p>This checklist reports verified implementation evidence. It is never an activation switch; live trading is not implemented.</p></div>
+            <div class="protection-grid" id="readinessList"><div class="protection-item pending"><span>01</span><div><strong>Live-order capability</strong><small>No live adapter or route is installed</small></div><b>DISABLED</b></div><div class="protection-item pending"><span>02</span><div><strong>Broker market data</strong><small>No broker has been selected or connected</small></div><b>NOT READY</b></div><div class="protection-item pending"><span>03</span><div><strong>News calendar</strong><small>Source freshness cannot be verified</small></div><b>NOT READY</b></div><div class="protection-item pending"><span>04</span><div><strong>Paper-forward history</strong><small id="forwardEvidenceSummary">0 / 100 closed broker-fed paper trades · operational milestone only, not strategy validation.</small></div><b id="forwardEvidenceStatus">INCOMPLETE</b></div></div>
+          </section>
+
+          <footer class="footer-note"><span>Paper-first by design · Strategy outcomes are not guaranteed.</span><span class="mono">LOCAL · LIVE DISABLED</span></footer>
+        </div>
+      </main>
+    </div>
+    <div class="toast" id="toast" role="status" aria-live="polite"><span class="toast-mark">✓</span><span id="toastText">Action complete</span></div>
+    <script src="/app.js?v=12"></script>
+  </body>
+</html>
