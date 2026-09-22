@@ -519,7 +519,7 @@ export function dashboardSnapshot(db, now = new Date()) {
       equity: riskState.freshness === 'FRESH' ? riskState.equity : paperEquity?.equity ?? null,
       dailyPnl: statistics.periods.today.sampleCount > 0 ? statistics.periods.today.realizedNetPnl : null,
       freeMargin: null, usedMargin: null, marginLevel: null, leverage: null,
-      currency: riskState.freshness === 'FRESH' ? statistics.currency : paperEquity?.currency ?? statistics.currency,
+      currency: riskState.freshness === 'FRESH' ? riskState.currency : paperEquity?.currency ?? statistics.currency,
     },
     risk: {
       limits: config.risk,
