@@ -501,9 +501,11 @@ export class PaperWorker {
           dependencies.marketData.durationMs = elapsedMilliseconds(marketStartedAt, this.monotonicNow());
           dependencies.marketData.status = error.code === 'DEPENDENCY_TIMEOUT' ? 'TIMEOUT' : 'ERROR';
           const previous = readState(this.db, 'marketDataHealth', {});
+          const safeReason = /^[A-Z][A-Z0-9_]{0,63}$/.test(error?.code ?? '')
+            ? error.code : 'MARKET_DATA_INVALID_OR_UNAVAILABLE';
           const failed = {
             status: 'UNAVAILABLE', provider: health.source, checkedAt: now.toISOString(),
-            reason: error.code === 'DEPENDENCY_TIMEOUT' ? 'MARKET_DATA_TIMEOUT' : 'MARKET_DATA_INVALID_OR_UNAVAILABLE',
+            reason: error.code === 'DEPENDENCY_TIMEOUT' ? 'MARKET_DATA_TIMEOUT' : safeReason,
           };
           writeState(this.db, 'marketDataHealth', failed, now.toISOString());
           if (previous.status !== failed.status || previous.reason !== failed.reason) {

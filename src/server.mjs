@@ -409,6 +409,7 @@ export function dashboardSnapshot(db, now = new Date()) {
     SELECT symbol, source, status, bid, ask, last, observed_at, received_at, details_json
     FROM market_snapshots ORDER BY received_at DESC LIMIT 1
   `).get() ?? null;
+  const marketDataHealth = readState(db, 'marketDataHealth', { status: 'UNAVAILABLE', reason: null });
   const receivedAt = latestMarket?.received_at ? Date.parse(latestMarket.received_at) : NaN;
   const observedAt = latestMarket?.observed_at ? Date.parse(latestMarket.observed_at) : NaN;
   const marketFresh = isFreshMarketSnapshot(latestMarket)
@@ -486,7 +487,7 @@ export function dashboardSnapshot(db, now = new Date()) {
     market: {
       symbol: 'XAUUSD',
       source: latestMarket?.source ?? health.source,
-      status: latestMarket?.status ?? 'UNAVAILABLE',
+      status: latestMarket?.status ?? marketDataHealth.status ?? 'UNAVAILABLE',
       dataFreshness: marketFresh ? 'FRESH' : latestMarket ? 'STALE' : 'UNAVAILABLE',
       quote: latestMarket ? {
         bid: latestMarket.bid,
@@ -508,7 +509,7 @@ export function dashboardSnapshot(db, now = new Date()) {
       spreadPrice: Number.isFinite(spreadPrice) && spreadPrice >= 0 ? spreadPrice : null,
       spreadPoints: Number.isFinite(spreadPrice) && Number(instrument?.tickSize) > 0 ? spreadPrice / Number(instrument.tickSize) : null,
       session: activeSessions(now),
-      reason: latestMarket ? JSON.parse(latestMarket.details_json).reason ?? null : reason,
+      reason: latestMarket ? JSON.parse(latestMarket.details_json).reason ?? null : marketDataHealth.reason ?? reason,
     },
     symbols: config.symbols,
     markets: marketWatchlistSnapshot(db, now),
