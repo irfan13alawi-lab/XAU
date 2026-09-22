@@ -285,6 +285,8 @@ test('market feed bypasses a Twelve Data rate limit with Biquote quotes and clos
     const payload = await provider.readMarketData(now);
     assert.deepEqual(Object.keys(payload.quotesBySymbol).sort(), symbols.slice().sort());
     for (const symbol of symbols) assert.equal(payload.candlesBySymbol[symbol].M15.length, 120);
+    assert.equal(payload.quote.bid, 2000);
+    assert.equal(payload.quote.ask, 2000.1);
     assert.equal(payload.marketOverview.provider, 'Biquote');
     provider.stop();
   } finally {

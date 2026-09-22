@@ -139,16 +139,16 @@ function quoteFromSwissquote(body, symbol, now) {
   const prices = rows.flatMap((row) => Array.isArray(row?.spreadProfilePrices) ? row.spreadProfilePrices : []);
   const selected = prices.find((item) => positive(item?.bid) && positive(item?.ask) && Number(item.ask) >= Number(item.bid));
   if (!selected) return null;
-  const mid = (Number(selected.bid) + Number(selected.ask)) / 2;
+  const bid = Number(selected.bid);
+  const ask = Number(selected.ask);
+  const mid = (bid + ask) / 2;
   const observedAt = parseTimestamp(rows.map((row) => row?.ts).find((value) => value != null)) ?? now;
-  const spread = configuredSpread();
-  if (!Number.isFinite(mid) || mid <= 0 || spread == null) return null;
-  const half = spread / 2;
+  if (!Number.isFinite(mid) || mid <= 0) return null;
   return {
     symbol,
     source: SOURCE,
-    bid: Number((mid - half).toFixed(8)),
-    ask: Number((mid + half).toFixed(8)),
+    bid: Number(bid.toFixed(8)),
+    ask: Number(ask.toFixed(8)),
     last: mid,
     observedAt: observedAt.toISOString(),
   };
@@ -161,12 +161,13 @@ function quoteFromBiquote(body, symbol, now) {
   const observedAt = parseTimestamp(body?.timestamp ?? body?.lastQuoteAt) ?? now;
   const spread = configuredSpread();
   if (body?.stale === true || mid == null || mid <= 0 || spread == null) return null;
+  const providerBookValid = bid != null && ask != null && bid > 0 && ask >= bid;
   const half = spread / 2;
   return {
     symbol,
     source: SOURCE,
-    bid: Number((mid - half).toFixed(8)),
-    ask: Number((mid + half).toFixed(8)),
+    bid: providerBookValid ? Number(bid.toFixed(8)) : Number((mid - half).toFixed(8)),
+    ask: providerBookValid ? Number(ask.toFixed(8)) : Number((mid + half).toFixed(8)),
     last: mid,
     observedAt: observedAt.toISOString(),
   };
