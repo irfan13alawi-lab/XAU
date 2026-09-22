@@ -5,6 +5,7 @@ import { evaluateNewsBlackout } from '../domain/news.mjs';
 import { evaluatePaperScan } from '../domain/paper-engine.mjs';
 import { activeSessions } from '../domain/market-sessions.mjs';
 import { loadFreshRiskMetrics } from './risk-state-service.mjs';
+import { isFreshMarketSnapshot } from '../market-source.mjs';
 
 function httpRequestAuditMetadata(httpRequestId) {
   return typeof httpRequestId === 'string'
@@ -18,16 +19,16 @@ function asJson(value, fallback = {}) {
   try { return JSON.parse(value); } catch { return fallback; }
 }
 
-function loadScanContext(db, now = new Date()) {
+function loadScanContext(db, now = new Date(), symbol = 'XAUUSD') {
   const latest = db.prepare(`
     SELECT symbol, source, status, bid, ask, last, observed_at, received_at, details_json
-    FROM market_snapshots ORDER BY received_at DESC LIMIT 1
-  `).get();
+    FROM market_snapshots WHERE symbol = ? ORDER BY received_at DESC LIMIT 1
+  `).get(symbol);
   const receivedAt = latest?.received_at ? Date.parse(latest.received_at) : NaN;
   const observedAt = latest?.observed_at ? Date.parse(latest.observed_at) : NaN;
   const receivedAgeMs = Number.isFinite(receivedAt) ? now.getTime() - receivedAt : Number.POSITIVE_INFINITY;
   const observedAgeMs = Number.isFinite(observedAt) ? now.getTime() - observedAt : Number.POSITIVE_INFINITY;
-  const marketFresh = latest?.source === 'BROKER' && latest.status === 'BROKER'
+  const marketFresh = isFreshMarketSnapshot(latest)
     && receivedAgeMs >= 0 && receivedAgeMs <= 30_000 && observedAgeMs >= 0 && observedAgeMs <= 30_000;
   const market = {
     source: latest?.source ?? 'none',
@@ -49,8 +50,8 @@ function loadScanContext(db, now = new Date()) {
     candlesByTimeframe[timeframe] = db.prepare(`
       SELECT open_price AS open, high_price AS high, low_price AS low, close_price AS close,
         tick_volume AS tickVolume, closed_at AS closedAt, source, quality
-      FROM candles WHERE symbol = 'XAUUSD' AND timeframe = ? ORDER BY closed_at DESC LIMIT 100
-    `).all(timeframe).reverse();
+      FROM candles WHERE symbol = ? AND timeframe = ? ORDER BY closed_at DESC LIMIT 100
+    `).all(symbol, timeframe).reverse();
   }
 
   const newsProvider = readState(db, 'newsProvider', { status: 'OFFLINE', fetchedAt: null });
@@ -101,6 +102,7 @@ function loadScanContext(db, now = new Date()) {
     version: configVersion,
   };
   return {
+    symbol,
     market,
     candlesByTimeframe,
     newsState,
@@ -115,7 +117,7 @@ function loadScanContext(db, now = new Date()) {
   };
 }
 
-export function persistScanResult(db, result, { logicalKey, now = new Date(), transactional = true, httpRequestId = null }) {
+export function persistScanResult(db, result, { logicalKey, symbol = 'XAUUSD', now = new Date(), transactional = true, httpRequestId = null }) {
   if (typeof logicalKey !== 'string' || logicalKey.length < 8 || logicalKey.length > 200) throw new TypeError('A bounded logical scan key is required.');
   const existing = db.prepare(`SELECT id, status, reason_json FROM scan_runs WHERE idempotency_key = ?`).get(logicalKey);
   if (existing) return { scanId: existing.id, status: existing.status, reasons: asJson(existing.reason_json, []), replayed: true, accepted: existing.status === 'ORDER_STAGED' };
@@ -149,7 +151,7 @@ export function persistScanResult(db, result, { logicalKey, now = new Date(), tr
     let accepted = result.accepted === true;
     const m15CandleClose = result.analyses?.find((item) => item.timeframe === 'M15')?.candleClosedAt ?? logicalKey;
     const logicalOrderKey = accepted
-      ? `XAUUSD:M15:${m15CandleClose}:${result.direction}`
+      ? `${symbol}:M15:${m15CandleClose}:${result.direction}`
       : null;
     if (accepted) {
       const side = result.direction === 'LONG' ? 'BUY' : 'SELL';
@@ -157,11 +159,11 @@ export function persistScanResult(db, result, { logicalKey, now = new Date(), tr
         SELECT id FROM signals WHERE logical_setup_key = ? LIMIT 1
       `).get(logicalOrderKey);
       const duplicateOrder = db.prepare(`
-        SELECT id FROM orders WHERE symbol = 'XAUUSD' AND side = ? AND status IN ('PENDING', 'PARTIAL') LIMIT 1
-      `).get(side);
+        SELECT id FROM orders WHERE symbol = ? AND side = ? AND status IN ('PENDING', 'PARTIAL') LIMIT 1
+      `).get(symbol, side);
       const duplicatePosition = db.prepare(`
-        SELECT id FROM positions WHERE symbol = 'XAUUSD' AND side = ? AND status IN ('OPEN', 'PARTIAL') LIMIT 1
-      `).get(result.direction);
+        SELECT id FROM positions WHERE symbol = ? AND side = ? AND status IN ('OPEN', 'PARTIAL') LIMIT 1
+      `).get(symbol, result.direction);
       if (duplicateLogicalSetup || duplicateOrder || duplicatePosition) {
         accepted = false;
         finalStatus = 'REJECTED';
@@ -171,8 +173,8 @@ export function persistScanResult(db, result, { logicalKey, now = new Date(), tr
 
     db.prepare(`
       INSERT INTO scan_runs (id, idempotency_key, symbol, started_at, completed_at, status, reason_json, config_version, correlation_id)
-      VALUES (?, ?, 'XAUUSD', ?, ?, ?, ?, ?, ?)
-    `).run(id, logicalKey, now.toISOString(), now.toISOString(), accepted ? 'ORDER_STAGED' : finalStatus, JSON.stringify(finalReasons), configVersion, correlationId);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, logicalKey, symbol, now.toISOString(), now.toISOString(), accepted ? 'ORDER_STAGED' : finalStatus, JSON.stringify(finalReasons), configVersion, correlationId);
 
     db.prepare(`
       UPDATE scan_runs SET direction = ?, score = ?, confluence_pct = ?, decision_snapshot_json = ? WHERE id = ?
@@ -249,9 +251,9 @@ export function persistScanResult(db, result, { logicalKey, now = new Date(), tr
       db.prepare(`
       INSERT INTO orders (id, idempotency_key, signal_id, symbol, side, order_type, status, quantity_lots, remaining_quantity_lots, entry_price, stop_price,
           take_profit_1, take_profit_2, expires_at, created_at, updated_at, snapshot_json)
-        VALUES (?, ?, ?, 'XAUUSD', ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        orderId, logicalOrderKey, signalId, direction === 'LONG' ? 'BUY' : 'SELL', plan.orderType,
+        orderId, logicalOrderKey, signalId, symbol, direction === 'LONG' ? 'BUY' : 'SELL', plan.orderType,
         String(sizing.lots), String(sizing.lots), String(plan.entry), String(plan.stop), String(plan.takeProfit1), String(plan.takeProfit2),
         new Date(now.getTime() + Number(plan.expiresAfterMinutes ?? 120) * 60_000).toISOString(),
         now.toISOString(), now.toISOString(), JSON.stringify(executionSnapshot),
@@ -271,10 +273,10 @@ export function persistScanResult(db, result, { logicalKey, now = new Date(), tr
   }
 }
 
-export function executePaperScan(db, now = new Date(), { transactional = true, httpRequestId = null } = {}) {
-  const context = loadScanContext(db, now);
+export function executePaperScan(db, now = new Date(), { symbol = 'XAUUSD', transactional = true, httpRequestId = null } = {}) {
+  const context = loadScanContext(db, now, symbol);
   const result = evaluatePaperScan(context);
   const m15Close = context.candlesByTimeframe.M15.at(-1)?.closedAt ?? 'UNAVAILABLE';
-  const logicalKey = `XAUUSD:M15:${m15Close}`;
-  return { result, persisted: persistScanResult(db, result, { logicalKey, now, transactional, httpRequestId }) };
+  const logicalKey = `${symbol}:M15:${m15Close}`;
+  return { result, persisted: persistScanResult(db, result, { logicalKey, symbol, now, transactional, httpRequestId }) };
 }
