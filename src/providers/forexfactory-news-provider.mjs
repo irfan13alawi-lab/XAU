@@ -1,5 +1,8 @@
 const SOURCE = 'ForexFactory';
-const CALENDAR_URL = 'https://nfs.faireconomy.media/ff_calendar_thisweek.json';
+const CALENDAR_URLS = Object.freeze([
+  'https://nfs.faireconomy.media/ff_calendar_thisweek.json',
+  'https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json',
+]);
 const MAX_EVENTS = 500;
 
 function errorWithCode(code) {
@@ -19,21 +22,28 @@ function normalizeImpact(value) {
 }
 
 async function readCalendarJson(signal) {
-  let response;
-  try {
-    response = await fetch(CALENDAR_URL, {
-      method: 'GET',
-      headers: { accept: 'application/json' },
-      signal,
-    });
-  } catch {
-    throw errorWithCode('NEWS_PROVIDER_NETWORK_ERROR');
+  let lastError = null;
+  for (const url of CALENDAR_URLS) {
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+        signal,
+      });
+      if (!response.ok) {
+        lastError = errorWithCode(response.status === 429 ? 'NEWS_PROVIDER_RATE_LIMITED' : 'NEWS_PROVIDER_HTTP_ERROR');
+        continue;
+      }
+      let body;
+      try { body = await response.json(); } catch { lastError = errorWithCode('NEWS_PROVIDER_INVALID_RESPONSE'); continue; }
+      if (Array.isArray(body)) return body;
+      lastError = errorWithCode('NEWS_PROVIDER_INVALID_RESPONSE');
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      lastError = errorWithCode('NEWS_PROVIDER_NETWORK_ERROR');
+    }
   }
-  if (!response.ok) throw errorWithCode(response.status === 429 ? 'NEWS_PROVIDER_RATE_LIMITED' : 'NEWS_PROVIDER_HTTP_ERROR');
-  let body;
-  try { body = await response.json(); } catch { throw errorWithCode('NEWS_PROVIDER_INVALID_RESPONSE'); }
-  if (!Array.isArray(body)) throw errorWithCode('NEWS_PROVIDER_INVALID_RESPONSE');
-  return body;
+  throw lastError ?? errorWithCode('NEWS_PROVIDER_NETWORK_ERROR');
 }
 
 export class ForexFactoryNewsCalendarProvider {

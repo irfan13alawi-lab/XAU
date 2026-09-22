@@ -9,7 +9,10 @@ import { isAcceptedMarketSource, isFreshMarketSnapshot, MARKET_QUOTE_MAX_AGE_MS 
 
 const TIMEFRAMES = new Set(['M15', 'M30', 'H1', 'H4']);
 const TIMEOUT_MS = 5_000;
-const NEWS_REFRESH_MS = 60_000;
+// The calendar payload is weekly and the readiness contract allows 30 minutes
+// of age. Refreshing every five minutes avoids hammering a public feed while
+// keeping the blackout gate current.
+const NEWS_REFRESH_MS = 5 * 60_000;
 const MAX_CANDLES_PER_FRAME = 300;
 const TELEMETRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const MAX_TELEMETRY_ROWS = 60_000;
