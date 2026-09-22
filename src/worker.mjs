@@ -264,7 +264,10 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
           reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
         }));
 
-      const candlesByTimeframe = payload?.candlesBySymbol?.[symbol] ?? (symbol === 'XAUUSD' ? payload?.candlesByTimeframe : null) ?? {};
+      const candlesByTimeframe = payload?.persistCandlesBySymbol?.[symbol]
+        ?? payload?.candlesBySymbol?.[symbol]
+        ?? (symbol === 'XAUUSD' ? payload?.candlesByTimeframe : null)
+        ?? {};
       for (const [timeframe, supplied] of Object.entries(candlesByTimeframe)) {
         if (!TIMEFRAMES.has(timeframe) || !Array.isArray(supplied)) { rejectedCandles += 1; continue; }
         const candles = [...supplied].slice(-MAX_CANDLES_PER_FRAME).sort((a, b) => Date.parse(a.closedAt ?? '') - Date.parse(b.closedAt ?? ''));

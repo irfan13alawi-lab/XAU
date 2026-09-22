@@ -177,6 +177,7 @@ export class TwelveDataMarketDataProvider {
   #failureCount = 0;
   #lastCandleCycleAt = 0;
   #candleCursor = 0;
+  #lastEmittedCandleAt = new Map();
 
   constructor({ symbols = config.symbols } = {}) {
     const normalized = [...new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()))];
@@ -291,10 +292,21 @@ export class TwelveDataMarketDataProvider {
       }
     }
     const candlesBySymbol = {};
+    const persistCandlesBySymbol = {};
     const marketOverviewBySymbol = {};
     for (const symbol of this.symbols) {
       const cache = this.#candleCache.get(symbol) ?? new Map();
       candlesBySymbol[symbol] = Object.fromEntries([...cache.entries()].map(([timeframe, item]) => [timeframe, item.value]));
+      persistCandlesBySymbol[symbol] = {};
+      for (const [timeframe, item] of cache.entries()) {
+        const latest = item.value.at(-1)?.closedAt ?? null;
+        const emissionKey = symbol + ':' + timeframe;
+        const previous = this.#lastEmittedCandleAt.get(emissionKey);
+        persistCandlesBySymbol[symbol][timeframe] = previous
+          ? item.value.filter((candle) => Date.parse(candle.closedAt) > Date.parse(previous))
+          : item.value;
+        if (latest) this.#lastEmittedCandleAt.set(emissionKey, latest);
+      }
       if (!quotesBySymbol[symbol]) errors.push({ symbol, reason: this.#lastErrorCode ?? 'MARKET_DATA_QUOTE_UNAVAILABLE' });
       if (quotesBySymbol[symbol]) marketOverviewBySymbol[symbol] = marketOverviewFromCandles(symbol, quotesBySymbol[symbol], candlesBySymbol[symbol], now);
     }
@@ -306,6 +318,7 @@ export class TwelveDataMarketDataProvider {
       candlesByTimeframe: candlesBySymbol[PRIMARY_SYMBOL] ?? {},
       quotesBySymbol,
       candlesBySymbol,
+      persistCandlesBySymbol,
       marketOverview: marketOverviewBySymbol[PRIMARY_SYMBOL] ?? null,
       marketOverviewBySymbol,
       errors,

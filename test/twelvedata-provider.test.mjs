@@ -82,7 +82,10 @@ test('Twelve Data adapter batches the four-symbol watchlist and advances one can
     assert.deepEqual(Object.keys(payload.candlesBySymbol).sort(), ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD']);
     for (const symbol of ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY']) {
       assert.equal(payload.candlesBySymbol[symbol].M15.length, 120);
+      assert.equal(payload.persistCandlesBySymbol[symbol].M15.length, 120);
     }
+    const cached = await provider.readMarketData(new Date(now.getTime() + 15_000));
+    assert.equal(cached.persistCandlesBySymbol.XAUUSD.M15.length, 0);
   } finally {
     if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
     else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
