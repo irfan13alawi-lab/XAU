@@ -93,6 +93,26 @@ if (telegramNotificationsEnabled && !telegramEnabled) {
 const paperFlag = (process.env.PAPER_MODE ?? 'true').trim().toLowerCase();
 if (!['true', 'false'].includes(paperFlag)) throw new Error('PAPER_MODE must be true or false.');
 
+function configuredSymbols(value) {
+  const symbols = String(value ?? 'XAUUSD,EURUSD,GBPUSD,USDJPY')
+    .split(',').map((item) => item.trim().toUpperCase()).filter(Boolean);
+  if (!symbols.length || symbols.length > 16 || symbols.some((symbol) => !/^[A-Z0-9]{6,12}$/.test(symbol))) {
+    throw new Error('NEXORA_SYMBOLS must contain 1-16 uppercase market symbols separated by commas.');
+  }
+  if (!symbols.includes('XAUUSD')) symbols.unshift('XAUUSD');
+  return Object.freeze([...new Set(symbols)]);
+}
+
+const symbols = configuredSymbols(process.env.NEXORA_SYMBOLS);
+
+const paperStartingEquityRaw = String(process.env.NEXORA_PAPER_STARTING_EQUITY ?? '').trim();
+const paperStartingEquity = paperStartingEquityRaw === '' ? null : Number(paperStartingEquityRaw);
+if (paperStartingEquity != null && (!Number.isFinite(paperStartingEquity) || paperStartingEquity <= 0)) {
+  throw new Error('NEXORA_PAPER_STARTING_EQUITY must be a positive number when configured.');
+}
+const paperCurrency = String(process.env.NEXORA_PAPER_CURRENCY ?? 'USD').trim().toUpperCase();
+if (!/^[A-Z]{3,8}$/.test(paperCurrency)) throw new Error('NEXORA_PAPER_CURRENCY must be an uppercase currency code.');
+
 function safeProviderLabel(value) {
   const label = String(value ?? '').trim();
   const looksSensitive = /(?:token|secret|api[-_.]?key|auth|password|credential|bearer)/i.test(label);
@@ -149,6 +169,9 @@ export const config = Object.freeze({
   dbPath: resolve(process.cwd(), process.env.NEXORA_DB_PATH ?? './data/nexora.sqlite'),
   paperMode: paperFlag === 'true',
   liveTradingEnabled: false,
+  symbols,
+  paperStartingEquity,
+  paperCurrency,
   brokerName: safeProviderLabel(process.env.NEXORA_BROKER ?? 'none'),
   marketSource: safeProviderLabel(process.env.NEXORA_MARKET_SOURCE ?? 'none'),
   marketProvider: safeProviderLabel(process.env.NEXORA_MARKET_SOURCE ?? 'none').toLowerCase(),
@@ -162,7 +185,7 @@ export const config = Object.freeze({
     allowedChatIds: telegramAllowedChatIds,
   }),
   buildId: localBuildId(),
-  schemaVersion: 7,
+  schemaVersion: 8,
   strategyProfileId,
   strategyVersion,
   strategyParameters,

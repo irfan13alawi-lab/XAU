@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks';
 import { appendAudit, readState, writeState } from './database.mjs';
 import { executePaperScan } from './services/paper-scan-service.mjs';
 import { reconcilePaperExecution } from './services/paper-lifecycle-service.mjs';
+import { capturePaperEquitySnapshot } from './services/paper-equity-service.mjs';
 import { isAcceptedMarketSource, isFreshMarketSnapshot } from './market-source.mjs';
 
 const TIMEFRAMES = new Set(['M15', 'M30', 'H1', 'H4']);
@@ -184,68 +185,77 @@ export class UnavailableNewsCalendarProvider {
 export function persistMarketData(db, payload, providerName, now = new Date()) {
   const safeProvider = providerLabel(providerName);
   const source = String(payload?.source ?? '').trim().toUpperCase();
-  const quote = payload?.quote;
-  if (!isAcceptedMarketSource(source) || quote?.symbol !== 'XAUUSD' || String(quote?.source ?? '').toUpperCase() !== source
-    || !positive(quote.bid) || !positive(quote.ask) || Number(quote.ask) < Number(quote.bid)) {
-    throw new TypeError('Provider must return a normalized market XAUUSD quote with valid bid/ask.');
+  const quotes = Object.values(payload?.quotesBySymbol ?? (payload?.quote ? { [payload.quote.symbol ?? 'XAUUSD']: payload.quote } : {}));
+  if (!isAcceptedMarketSource(source) || !quotes.length) {
+    throw new TypeError('Provider must return at least one normalized market quote with valid bid/ask.');
   }
-  const observedTime = Date.parse(quote.observedAt ?? '');
-  if (!Number.isFinite(observedTime)) throw new TypeError('Provider quote must include a valid observation timestamp.');
-  const ageMs = now.getTime() - observedTime;
-  const fresh = ageMs >= 0 && ageMs <= 30_000;
+  const normalizedQuotes = quotes.map((quote) => {
+    const symbol = String(quote?.symbol ?? '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{6,12}$/.test(symbol) || String(quote?.source ?? '').toUpperCase() !== source
+      || !positive(quote.bid) || !positive(quote.ask) || Number(quote.ask) < Number(quote.bid)) {
+      throw new TypeError('Provider returned an invalid normalized market quote.');
+    }
+    const observedTime = Date.parse(quote.observedAt ?? '');
+    if (!Number.isFinite(observedTime)) throw new TypeError('Provider quote must include a valid observation timestamp.');
+    return { quote, symbol, observedTime, fresh: now.getTime() - observedTime >= 0 && now.getTime() - observedTime <= 30_000 };
+  });
+  const primary = normalizedQuotes.find((item) => item.symbol === 'XAUUSD') ?? normalizedQuotes[0];
   const receivedAt = now.toISOString();
-  const quoteStatus = fresh ? source : 'STALE';
-  const insertCandle = db.prepare(`
-    INSERT OR IGNORE INTO candles (symbol, timeframe, closed_at, open_price, high_price, low_price, close_price, tick_volume, source, quality)
-    VALUES ('XAUUSD', ?, ?, ?, ?, ?, ?, ?, ?, 'VERIFIED_CLOSED')
-  `);
-  const insertSnapshot = db.prepare(`
-    INSERT INTO market_snapshots (id, symbol, source, status, bid, ask, last, observed_at, received_at, details_json)
-    VALUES (?, 'XAUUSD', ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
   let insertedCandles = 0;
   let rejectedCandles = 0;
   let conflicts = 0;
   db.exec('BEGIN IMMEDIATE');
   try {
-    insertSnapshot.run(randomUUID(), source, quoteStatus, String(quote.bid), String(quote.ask), quote.last == null ? null : String(quote.last),
-      new Date(observedTime).toISOString(), receivedAt, JSON.stringify({ provider: safeProvider, spreadModel: payload.paperSpread ?? null, reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW' }));
+    for (const { quote, symbol, observedTime, fresh } of normalizedQuotes) {
+      const quoteStatus = fresh ? source : 'STALE';
+      db.prepare(`
+        INSERT INTO market_snapshots (id, symbol, source, status, bid, ask, last, observed_at, received_at, details_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(randomUUID(), symbol, source, quoteStatus, String(quote.bid), String(quote.ask), quote.last == null ? null : String(quote.last),
+        new Date(observedTime).toISOString(), receivedAt, JSON.stringify({ provider: safeProvider, spreadModel: payload.paperSpread ?? null, reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW' }));
 
-    for (const [timeframe, supplied] of Object.entries(payload.candlesByTimeframe ?? {})) {
-      if (!TIMEFRAMES.has(timeframe) || !Array.isArray(supplied)) { rejectedCandles += 1; continue; }
-      const candles = [...supplied].slice(-MAX_CANDLES_PER_FRAME).sort((a, b) => Date.parse(a.closedAt ?? '') - Date.parse(b.closedAt ?? ''));
-      for (const candle of candles) {
-        const closedAt = Date.parse(candle?.closedAt ?? '');
-        if (!candleValid(candle) || String(candle.source ?? '').toUpperCase() !== source || closedAt > now.getTime()) {
-          rejectedCandles += 1;
-          continue;
-        }
-        const result = insertCandle.run(timeframe, new Date(closedAt).toISOString(), String(candle.open), String(candle.high),
-          String(candle.low), String(candle.close), candle.tickVolume == null ? null : Number(candle.tickVolume), source);
-        if (Number(result.changes) > 0) {
-          insertedCandles += 1;
-          continue;
-        }
-        const existing = db.prepare(`
-          SELECT open_price, high_price, low_price, close_price, tick_volume, quality FROM candles
-          WHERE symbol = 'XAUUSD' AND timeframe = ? AND closed_at = ?
-        `).get(timeframe, new Date(closedAt).toISOString());
-        if (existing && !valuesMatch(existing, candle) && existing.quality !== 'CONFLICT') {
-          db.prepare(`UPDATE candles SET quality = 'CONFLICT' WHERE symbol = 'XAUUSD' AND timeframe = ? AND closed_at = ?`)
-            .run(timeframe, new Date(closedAt).toISOString());
-          appendAudit(db, {
-            actor: 'market-data-adapter', eventType: 'MARKET_CANDLE_CONFLICT', entityType: 'candle',
-            entityId: `XAUUSD:${timeframe}:${new Date(closedAt).toISOString()}`,
-            reason: 'A repeated closed-candle timestamp contained different OHLCV values; stored values were not overwritten.',
-            metadata: { timeframe, closedAt: new Date(closedAt).toISOString(), provider: safeProvider },
-          }, receivedAt);
-          conflicts += 1;
+      const candlesByTimeframe = payload?.candlesBySymbol?.[symbol] ?? (symbol === 'XAUUSD' ? payload?.candlesByTimeframe : null) ?? {};
+      for (const [timeframe, supplied] of Object.entries(candlesByTimeframe)) {
+        if (!TIMEFRAMES.has(timeframe) || !Array.isArray(supplied)) { rejectedCandles += 1; continue; }
+        const candles = [...supplied].slice(-MAX_CANDLES_PER_FRAME).sort((a, b) => Date.parse(a.closedAt ?? '') - Date.parse(b.closedAt ?? ''));
+        for (const candle of candles) {
+          const closedAt = Date.parse(candle?.closedAt ?? '');
+          if (!candleValid(candle) || String(candle.source ?? '').toUpperCase() !== source || closedAt > now.getTime()
+            || (candle.symbol != null && String(candle.symbol).toUpperCase() !== symbol)) {
+            rejectedCandles += 1;
+            continue;
+          }
+          const result = db.prepare(`
+            INSERT OR IGNORE INTO candles (symbol, timeframe, closed_at, open_price, high_price, low_price, close_price, tick_volume, source, quality)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'VERIFIED_CLOSED')
+          `).run(symbol, timeframe, new Date(closedAt).toISOString(), String(candle.open), String(candle.high),
+            String(candle.low), String(candle.close), candle.tickVolume == null ? null : Number(candle.tickVolume), source);
+          if (Number(result.changes) > 0) {
+            insertedCandles += 1;
+            continue;
+          }
+          const existing = db.prepare(`
+            SELECT open_price, high_price, low_price, close_price, tick_volume, quality FROM candles
+            WHERE symbol = ? AND timeframe = ? AND closed_at = ?
+          `).get(symbol, timeframe, new Date(closedAt).toISOString());
+          if (existing && !valuesMatch(existing, candle) && existing.quality !== 'CONFLICT') {
+            db.prepare(`UPDATE candles SET quality = 'CONFLICT' WHERE symbol = ? AND timeframe = ? AND closed_at = ?`)
+              .run(symbol, timeframe, new Date(closedAt).toISOString());
+            appendAudit(db, {
+              actor: 'market-data-adapter', eventType: 'MARKET_CANDLE_CONFLICT', entityType: 'candle',
+              entityId: `${symbol}:${timeframe}:${new Date(closedAt).toISOString()}`,
+              reason: 'A repeated closed-candle timestamp contained different OHLCV values; stored values were not overwritten.',
+              metadata: { symbol, timeframe, closedAt: new Date(closedAt).toISOString(), provider: safeProvider },
+            }, receivedAt);
+            conflicts += 1;
+          }
         }
       }
     }
+    const fresh = primary.fresh;
     writeState(db, 'marketDataHealth', {
       status: fresh ? 'HEALTHY' : 'STALE', provider: safeProvider, source, checkedAt: receivedAt,
-      insertedCandles, rejectedCandles, conflicts,
+      symbols: normalizedQuotes.map((item) => item.symbol), insertedCandles, rejectedCandles, conflicts,
       reason: !fresh ? 'QUOTE_STALE_OR_CLOCK_SKEW' : rejectedCandles || conflicts ? 'CANDLE_QUALITY_ISSUES' : null,
     }, receivedAt);
     if (payload.riskMetrics != null) {
@@ -259,10 +269,15 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
   }
 
   return {
-    symbol: 'XAUUSD', source, status: quoteStatus,
-    dataFreshness: fresh ? 'FRESH' : 'STALE', bid: Number(quote.bid), ask: Number(quote.ask),
-    last: quote.last == null ? null : Number(quote.last), observedAt: new Date(observedTime).toISOString(),
-    receivedAt, reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
+    symbol: primary.symbol, source, status: primary.fresh ? source : 'STALE',
+    dataFreshness: primary.fresh ? 'FRESH' : 'STALE', bid: Number(primary.quote.bid), ask: Number(primary.quote.ask),
+    last: primary.quote.last == null ? null : Number(primary.quote.last), observedAt: new Date(primary.observedTime).toISOString(),
+    receivedAt, reason: primary.fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
+    quotesBySymbol: Object.fromEntries(normalizedQuotes.map(({ quote, symbol, observedTime, fresh }) => [symbol, {
+      symbol, source, status: fresh ? source : 'STALE', dataFreshness: fresh ? 'FRESH' : 'STALE',
+      bid: Number(quote.bid), ask: Number(quote.ask), last: quote.last == null ? null : Number(quote.last),
+      observedAt: new Date(observedTime).toISOString(), receivedAt,
+    }])),
   };
 }
 
@@ -318,15 +333,15 @@ export function persistNewsCalendar(db, payload, providerName, now = new Date())
   }
 }
 
-function freshClosedM15(db, now) {
+function freshClosedM15(db, now, symbol = 'XAUUSD') {
   const candle = db.prepare(`
-    SELECT closed_at, source, quality FROM candles WHERE symbol = 'XAUUSD' AND timeframe = 'M15'
+    SELECT closed_at, source, quality FROM candles WHERE symbol = ? AND timeframe = 'M15'
     ORDER BY closed_at DESC LIMIT 1
-  `).get();
+  `).get(symbol);
   if (!candle || !isAcceptedMarketSource(candle.source) || candle.quality !== 'VERIFIED_CLOSED') return null;
   const closedAt = Date.parse(candle.closed_at);
   if (!Number.isFinite(closedAt) || closedAt > now.getTime() || now.getTime() - closedAt > 30 * 60_000) return null;
-  const quote = db.prepare(`SELECT source, status, observed_at, received_at FROM market_snapshots ORDER BY received_at DESC LIMIT 1`).get();
+  const quote = db.prepare(`SELECT source, status, observed_at, received_at FROM market_snapshots WHERE symbol = ? ORDER BY received_at DESC LIMIT 1`).get(symbol);
   const observed = Date.parse(quote?.observed_at ?? '');
   const received = Date.parse(quote?.received_at ?? '');
   if (!isFreshMarketSnapshot(quote) || !Number.isFinite(observed) || !Number.isFinite(received)
@@ -371,6 +386,7 @@ export class PaperWorker {
     newsRefreshMs = NEWS_REFRESH_MS,
     dependencyTimeoutMs = TIMEOUT_MS,
     monotonicNow = () => performance.now(),
+    symbols = ['XAUUSD'],
   }) {
     this.db = db;
     this.provider = provider;
@@ -380,6 +396,7 @@ export class PaperWorker {
     this.newsRefreshMs = newsRefreshMs;
     this.dependencyTimeoutMs = dependencyTimeoutMs;
     this.monotonicNow = monotonicNow;
+    this.symbols = Object.freeze([...new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()))]);
     this.running = false;
   }
 
@@ -451,6 +468,7 @@ export class PaperWorker {
       };
       this.#lastHealthState = persistHealth(this.db, health, now, this.#lastHealthState);
       let quote = null;
+      let quotesBySymbol = {};
       let marketDataResult = null;
       if (health.status === 'HEALTHY' && typeof this.provider.readMarketData === 'function') {
         dependencies.marketData = { attempted: true, durationMs: null, status: 'UNAVAILABLE' };
@@ -460,6 +478,7 @@ export class PaperWorker {
           dependencies.marketData.durationMs = elapsedMilliseconds(marketStartedAt, this.monotonicNow());
           if (payload) {
             quote = persistMarketData(this.db, payload, health.source, now);
+            quotesBySymbol = quote.quotesBySymbol ?? {};
             marketDataResult = readState(this.db, 'marketDataHealth', null);
             dependencies.marketData.status = quote.dataFreshness === 'FRESH' ? 'HEALTHY' : 'STALE';
           } else {
@@ -487,21 +506,31 @@ export class PaperWorker {
         durationMs: newsResult.durationMs,
         status: newsResult.attempted ? news.status : 'CACHED',
       };
-      let scan = null;
-      const closeAt = freshClosedM15(this.db, now);
-      const lastScanClose = readState(this.db, 'lastWorkerM15Close', null);
-      if (closeAt && closeAt !== lastScanClose) {
-        const evaluated = executePaperScan(this.db, now);
-        writeState(this.db, 'lastWorkerM15Close', closeAt, now.toISOString());
-        scan = { scanId: evaluated.persisted.scanId, status: evaluated.persisted.status, replayed: evaluated.persisted.replayed, reasons: evaluated.persisted.reasons };
+      const scans = [];
+      for (const symbol of this.symbols) {
+        const closeAt = freshClosedM15(this.db, now, symbol);
+        const scanStateKey = symbol === 'XAUUSD' ? 'lastWorkerM15Close' : `lastWorkerM15Close:${symbol}`;
+        const lastScanClose = readState(this.db, scanStateKey, null);
+        if (closeAt && closeAt !== lastScanClose) {
+          const evaluated = executePaperScan(this.db, now, { symbol });
+          writeState(this.db, scanStateKey, closeAt, now.toISOString());
+          scans.push({ symbol, scanId: evaluated.persisted.scanId, status: evaluated.persisted.status, replayed: evaluated.persisted.replayed, reasons: evaluated.persisted.reasons });
+        }
       }
 
-      const execution = reconcilePaperExecution(this.db, {
-        quote,
-        costs: executionCosts(this.db),
-        paperMode: readState(this.db, 'paperMode', true) === true,
-        now,
-      });
+      const execution = { expired: 0, cancelled: 0, filled: 0, monitored: 0, closed: 0, skipped: 0, reasons: [] };
+      for (const symbol of this.symbols) {
+        const symbolQuote = quotesBySymbol[symbol] ?? (symbol === 'XAUUSD' ? quote : null);
+        const result = reconcilePaperExecution(this.db, {
+          quote: symbolQuote,
+          costs: executionCosts(this.db),
+          paperMode: readState(this.db, 'paperMode', true) === true,
+          now,
+        });
+        for (const field of ['expired', 'cancelled', 'filled', 'monitored', 'closed', 'skipped']) execution[field] += Number(result[field] ?? 0);
+        for (const reason of result.reasons ?? []) if (!execution.reasons.includes(reason)) execution.reasons.push(reason);
+      }
+      capturePaperEquitySnapshot(this.db, now);
       const telemetry = {
         durationMs: elapsedMilliseconds(tickStartedAt, this.monotonicNow()),
         dependencies,
@@ -513,7 +542,7 @@ export class PaperWorker {
       telemetryRecordAttempted = true;
       this.#telemetryPruneDue = false;
       this.#telemetryTicksSincePrune = (this.#telemetryTicksSincePrune + 1) % 64;
-      return { health, market: marketDataResult, news, scan, execution, telemetry, skipped: false };
+      return { health, market: marketDataResult, scan: scans.find((item) => item.symbol === 'XAUUSD') ?? null, scans, execution, telemetry, skipped: false };
     } catch (error) {
       const knownErrorCodes = new Set(['DEPENDENCY_TIMEOUT', 'SQLITE_BUSY', 'SQLITE_CORRUPT', 'SQLITE_IOERR', 'BROKER_REJECTED', 'RATE_LIMITED']);
       const errorClass = knownErrorCodes.has(error?.code) ? error.code : error instanceof TypeError ? 'TYPE_ERROR' : 'UNCLASSIFIED';

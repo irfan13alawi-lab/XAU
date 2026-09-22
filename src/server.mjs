@@ -15,6 +15,7 @@ import { evaluateRiskGuard } from './domain/risk.mjs';
 import { activeSessions } from './domain/market-sessions.mjs';
 import { aggregateTradeStatistics } from './domain/statistics.mjs';
 import { loadFreshRiskMetrics } from './services/risk-state-service.mjs';
+import { latestPaperEquitySnapshot } from './services/paper-equity-service.mjs';
 import { TelegramService } from './services/telegram-service.mjs';
 import { closePaperPosition } from './services/paper-lifecycle-service.mjs';
 
@@ -289,16 +290,17 @@ function latestMtfSnapshot(db) {
   };
 }
 
-function marketCandlesSnapshot(db, timeframe, now = new Date()) {
+function marketCandlesSnapshot(db, timeframe, now = new Date(), symbol = 'XAUUSD') {
   const duration = TIMEFRAME_MS[timeframe];
   if (!duration) throw new TypeError('A supported timeframe is required: M15, M30, H1, or H4.');
+  if (!config.symbols.includes(symbol)) throw new TypeError('An enabled market symbol is required.');
   const candles = db.prepare(`
     SELECT open_price AS open, high_price AS high, low_price AS low, close_price AS close,
       tick_volume AS tickVolume, closed_at AS closedAt, source
     FROM candles
-    WHERE symbol = 'XAUUSD' AND timeframe = ? AND source IN ('BROKER', 'MARKET_DATA') AND quality = 'VERIFIED_CLOSED'
+    WHERE symbol = ? AND timeframe = ? AND source IN ('BROKER', 'MARKET_DATA') AND quality = 'VERIFIED_CLOSED'
     ORDER BY closed_at DESC LIMIT 200
-  `).all(timeframe).reverse().map((item) => ({
+  `).all(symbol, timeframe).reverse().map((item) => ({
     open: Number(item.open), high: Number(item.high), low: Number(item.low), close: Number(item.close),
     tickVolume: item.tickVolume == null ? null : Number(item.tickVolume), closedAt: item.closedAt, source: item.source,
   })).filter((item) => [item.open, item.high, item.low, item.close].every(Number.isFinite)
@@ -322,7 +324,7 @@ function marketCandlesSnapshot(db, timeframe, now = new Date()) {
   const today = candles.filter((item) => item.closedAt.slice(0, 10) === utcDate);
   const indicators = calculateIndicators(candles);
   return {
-    symbol: 'XAUUSD', timeframe, source: latest?.source ?? 'none',
+    symbol, timeframe, source: latest?.source ?? 'none',
     dataFreshness, lastClosedAt: latest?.closedAt ?? null,
     candleCount: candles.length, requiredCandles: 100, sufficientHistory: candles.length >= 100,
     reason: !latest ? 'NO_VERIFIED_MARKET_CANDLES' : dataFreshness === 'STALE' ? 'CANDLE_HISTORY_STALE' : candles.length < 100 ? 'INSUFFICIENT_CLOSED_CANDLES' : null,
@@ -334,6 +336,37 @@ function marketCandlesSnapshot(db, timeframe, now = new Date()) {
     utcDayRange: today.length ? { high: Math.max(...today.map((item) => item.high)), low: Math.min(...today.map((item) => item.low)), date: utcDate } : null,
     tickVolumeRatio: indicators.tickVolumeRatio,
   };
+}
+
+function marketWatchlistSnapshot(db, now = new Date()) {
+  return config.symbols.map((symbol) => {
+    const latest = db.prepare(`
+      SELECT symbol, source, status, bid, ask, last, observed_at, received_at, details_json
+      FROM market_snapshots WHERE symbol = ? ORDER BY received_at DESC LIMIT 1
+    `).get(symbol) ?? null;
+    const observedAt = latest?.observed_at ? Date.parse(latest.observed_at) : NaN;
+    const receivedAt = latest?.received_at ? Date.parse(latest.received_at) : NaN;
+    const fresh = isFreshMarketSnapshot(latest)
+      && Number.isFinite(observedAt) && Number.isFinite(receivedAt)
+      && now.getTime() >= observedAt && now.getTime() - observedAt <= 30_000
+      && now.getTime() >= receivedAt && now.getTime() - receivedAt <= 30_000;
+    const lastCandle = db.prepare(`
+      SELECT closed_at, source, quality FROM candles WHERE symbol = ? AND timeframe = 'M15'
+      ORDER BY closed_at DESC LIMIT 1
+    `).get(symbol) ?? null;
+    return {
+      symbol,
+      source: latest?.source ?? 'none',
+      status: latest?.status ?? 'UNAVAILABLE',
+      dataFreshness: fresh ? 'FRESH' : latest ? 'STALE' : 'UNAVAILABLE',
+      quote: latest ? { bid: latest.bid, ask: latest.ask, last: latest.last, observedAt: latest.observed_at } : null,
+      spreadPrice: latest?.bid != null && latest?.ask != null ? Number(latest.ask) - Number(latest.bid) : null,
+      lastClosedCandleAt: lastCandle?.closed_at ?? null,
+      candleSource: lastCandle?.source ?? null,
+      candleQuality: lastCandle?.quality ?? null,
+      reason: latest ? parseJson(latest.details_json).reason ?? null : 'NO_MARKET_SNAPSHOT',
+    };
+  });
 }
 
 export function dashboardSnapshot(db, now = new Date()) {
@@ -388,6 +421,7 @@ export function dashboardSnapshot(db, now = new Date()) {
   const instrument = readState(db, 'instrumentMetadata', null);
   const spreadPrice = latestMarket?.bid != null && latestMarket?.ask != null ? Number(latestMarket.ask) - Number(latestMarket.bid) : null;
   const riskState = loadFreshRiskMetrics(db, now);
+  const paperEquity = latestPaperEquitySnapshot(db);
   const riskGuard = evaluateRiskGuard({
     dailyLossR: riskState.freshness === 'FRESH' ? riskState.dailyLossR : null,
     drawdownPct: riskState.freshness === 'FRESH' ? riskState.drawdownPct : null,
@@ -461,18 +495,20 @@ export function dashboardSnapshot(db, now = new Date()) {
       session: activeSessions(now),
       reason: latestMarket ? JSON.parse(latestMarket.details_json).reason ?? null : reason,
     },
+    symbols: config.symbols,
+    markets: marketWatchlistSnapshot(db, now),
     news: { status: newsFresh ? 'HEALTHY' : news.status === 'HEALTHY' ? 'STALE' : news.status, source: news.source, fetchedAt: news.fetchedAt, reason: newsFresh ? null : news.reason },
     account: {
-      balance: null,
-      equity: riskState.freshness === 'FRESH' ? riskState.equity : null,
+      balance: paperEquity?.balance ?? null,
+      equity: riskState.freshness === 'FRESH' ? riskState.equity : paperEquity?.equity ?? null,
       dailyPnl: statistics.periods.today.sampleCount > 0 ? statistics.periods.today.realizedNetPnl : null,
       freeMargin: null, usedMargin: null, marginLevel: null, leverage: null,
-      currency: statistics.currency,
+      currency: riskState.freshness === 'FRESH' ? statistics.currency : paperEquity?.currency ?? statistics.currency,
     },
     risk: {
       limits: config.risk,
       dailyLossR: riskState.freshness === 'FRESH' ? riskState.dailyLossR : null,
-      drawdownPct: riskState.freshness === 'FRESH' ? riskState.drawdownPct : null,
+      drawdownPct: riskState.freshness === 'FRESH' ? riskState.drawdownPct : paperEquity?.drawdownPct ?? null,
       openRiskPct: riskState.freshness === 'FRESH' ? riskState.openRiskPct : null,
       freshness: riskState.freshness,
       updatedAt: riskState.updatedAt,
@@ -480,6 +516,7 @@ export function dashboardSnapshot(db, now = new Date()) {
       status: riskState.freshness !== 'FRESH' ? 'RISK STATE UNAVAILABLE'
         : !riskGuard.allowed ? 'RISK GUARD TRIPPED' : brokerOnline ? 'CHECKS REQUIRED' : 'ENTRY BLOCKED',
     },
+    paperEquity,
     worker: {
       running: workerReady,
       heartbeatAt,
@@ -747,10 +784,12 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
       }
       if (method === 'GET' && url.pathname === '/api/market/candles') {
         const timeframe = url.searchParams.get('timeframe') ?? 'M15';
+        const symbol = String(url.searchParams.get('symbol') ?? 'XAUUSD').trim().toUpperCase();
         if (!Object.hasOwn(TIMEFRAME_MS, timeframe)) {
           return jsonResponse(res, 400, { error: 'Unsupported timeframe. Use M15, M30, H1, or H4.' });
         }
-        return jsonResponse(res, 200, marketCandlesSnapshot(db, timeframe, now));
+        if (!config.symbols.includes(symbol)) return jsonResponse(res, 400, { error: 'Unsupported market symbol.' });
+        return jsonResponse(res, 200, marketCandlesSnapshot(db, timeframe, now, symbol));
       }
       if (method === 'GET' && url.pathname === '/api/mtf/latest') {
         return jsonResponse(res, 200, latestMtfSnapshot(db));
@@ -775,6 +814,15 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
       }
       if (method === 'GET' && url.pathname === '/api/stats') {
         return jsonResponse(res, 200, aggregateStats(db, now));
+      }
+      if (method === 'GET' && url.pathname === '/api/equity/snapshots') {
+        const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') ?? 100)));
+        const rows = db.prepare(`
+          SELECT id, source, currency, balance, equity, realized_pnl AS realizedPnl,
+            unrealized_pnl AS unrealizedPnl, drawdown_pct AS drawdownPct, observed_at AS observedAt
+          FROM equity_snapshots ORDER BY observed_at DESC LIMIT ?
+        `).all(Number.isFinite(limit) ? limit : 100);
+        return jsonResponse(res, 200, { configured: config.paperStartingEquity != null, startingEquity: config.paperStartingEquity, currency: config.paperCurrency, snapshots: rows });
       }
       if (method === 'GET' && url.pathname === '/api/audit') {
         const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 25)));
@@ -1164,7 +1212,7 @@ function bootstrap() {
         reason: 'Local paper-only service started; live execution capability is absent.',
         metadata: { buildId: config.buildId, schemaVersion: config.schemaVersion },
       });
-      worker = new PaperWorker({ db, provider: createMarketProvider() });
+      worker = new PaperWorker({ db, provider: createMarketProvider(), symbols: config.symbols });
       worker.start();
       initialized = true;
       const address = server.address();
