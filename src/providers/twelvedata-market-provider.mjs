@@ -160,7 +160,7 @@ function quoteFromBiquote(body, symbol, now) {
   const mid = number(body?.mid) ?? (bid != null && ask != null ? (bid + ask) / 2 : null);
   const observedAt = parseTimestamp(body?.timestamp ?? body?.lastQuoteAt) ?? now;
   const spread = configuredSpread();
-  if (mid == null || mid <= 0 || spread == null) return null;
+  if (body?.stale === true || mid == null || mid <= 0 || spread == null) return null;
   const half = spread / 2;
   return {
     symbol,
@@ -371,7 +371,7 @@ export class TwelveDataMarketDataProvider {
     const biquoteUnresolved = missing.filter((symbol) => !quotes[symbol]);
     for (const symbol of biquoteUnresolved) {
       try {
-        const body = await getJson(`https://biquote.io/api/${normalizedSymbol(symbol)}?allowStale=false`, signal);
+        const body = await getJson(`https://biquote.io/api/${normalizedSymbol(symbol)}`, signal);
         const quote = quoteFromBiquote(body, symbol, now);
         if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
         this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
