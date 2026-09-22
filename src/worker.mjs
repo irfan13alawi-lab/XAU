@@ -637,7 +637,13 @@ export class PaperWorker {
       }
 
       const execution = { expired: 0, cancelled: 0, filled: 0, monitored: 0, closed: 0, skipped: 0, reasons: [] };
+      const activeExecutionSymbols = new Set(this.db.prepare(`
+        SELECT symbol FROM orders WHERE status IN ('PENDING', 'PARTIAL')
+        UNION
+        SELECT symbol FROM positions WHERE status IN ('OPEN', 'PARTIAL')
+      `).all().map((row) => row.symbol));
       for (const symbol of this.symbols) {
+        if (!activeExecutionSymbols.has(symbol)) continue;
         const symbolQuote = quotesBySymbol[symbol] ?? (symbol === 'XAUUSD' ? quote : null);
         const result = reconcilePaperExecution(this.db, {
           quote: symbolQuote,
