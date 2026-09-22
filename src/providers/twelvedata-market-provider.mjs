@@ -252,6 +252,7 @@ export class TwelveDataMarketDataProvider {
   #lastCandleCycleAt = 0;
   #candleCursor = 0;
   #lastEmittedCandleAt = new Map();
+  #quoteNetworkAttempted = false;
   #backgroundTimer = null;
   #backgroundRefreshInFlight = false;
 
@@ -290,6 +291,11 @@ export class TwelveDataMarketDataProvider {
     const cachedQuotes = this.#cachedQuotes(now);
     const missing = force ? this.symbols : this.symbols.filter((symbol) => !cachedQuotes[symbol]);
     if (!missing.length) return cachedQuotes;
+    // After the initial hydration, health checks must never become a network
+    // reconnect loop. The background feed owns refreshes; an expired cache
+    // therefore fails closed quickly until that feed succeeds again.
+    if (!force && this.#quoteNetworkAttempted) return cachedQuotes;
+    if (!force) this.#quoteNetworkAttempted = true;
     const twelveDataAllowed = Boolean(key) && Date.now() >= this.#marketDataRetryAt;
     // Twelve Data accepts comma-separated symbols on currency_conversion. One
     // batched request keeps the four-symbol watchlist within the provider's
