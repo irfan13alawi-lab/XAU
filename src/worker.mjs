@@ -542,7 +542,16 @@ export class PaperWorker {
       telemetryRecordAttempted = true;
       this.#telemetryPruneDue = false;
       this.#telemetryTicksSincePrune = (this.#telemetryTicksSincePrune + 1) % 64;
-      return { health, market: marketDataResult, scan: scans.find((item) => item.symbol === 'XAUUSD') ?? null, scans, execution, telemetry, skipped: false };
+      return {
+        health,
+        market: marketDataResult,
+        news,
+        scan: scans.find((item) => item.symbol === 'XAUUSD') ?? null,
+        scans,
+        execution,
+        telemetry,
+        skipped: false,
+      };
     } catch (error) {
       const knownErrorCodes = new Set(['DEPENDENCY_TIMEOUT', 'SQLITE_BUSY', 'SQLITE_CORRUPT', 'SQLITE_IOERR', 'BROKER_REJECTED', 'RATE_LIMITED']);
       const errorClass = knownErrorCodes.has(error?.code) ? error.code : error instanceof TypeError ? 'TYPE_ERROR' : 'UNCLASSIFIED';
