@@ -164,11 +164,10 @@ export class TwelveDataMarketDataProvider {
     if (!key) throw errorWithCode('TWELVEDATA_API_KEY_MISSING');
     const cached = this.#quoteCache.get(symbol);
     if (cached && Date.now() - cached.fetchedAt < QUOTE_CACHE_MS) return cached.value;
-    // /price is Twelve Data's latest-price endpoint. Unlike /exchange_rate,
-    // it avoids reusing an older exchange-rate timestamp for a live read-only
-    // quote while the candle history remains sourced from /time_series.
-    const url = new URL('https://api.twelvedata.com/price');
-    url.search = new URLSearchParams({ symbol: providerSymbol(symbol), apikey: key, timezone: 'UTC' }).toString();
+    // currency_conversion supports commodity pairs such as XAU/USD and
+    // returns a current rate plus provider timestamp for freshness checks.
+    const url = new URL('https://api.twelvedata.com/currency_conversion');
+    url.search = new URLSearchParams({ symbol: providerSymbol(symbol), amount: '1', apikey: key, timezone: 'UTC' }).toString();
     const quote = quoteFromResponse(await getJson(url, signal), symbol, now);
     if (!quote) throw errorWithCode(configuredSpread() == null ? 'PAPER_SPREAD_NOT_CONFIGURED' : 'MARKET_DATA_QUOTE_INVALID');
     this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });

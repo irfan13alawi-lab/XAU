@@ -26,8 +26,8 @@ test('Twelve Data adapter returns a VPS-safe XAU market contract with spot deriv
   const now = new Date('2026-09-22T00:00:00.000Z');
   globalThis.fetch = async (input) => {
     const url = new URL(input);
-    if (url.pathname.endsWith('/price')) {
-      return new Response(JSON.stringify({ price: '2030.50' }), { status: 200 });
+    if (url.pathname.endsWith('/currency_conversion')) {
+      return new Response(JSON.stringify({ rate: '2030.50', timestamp: Math.floor(now.getTime() / 1000) }), { status: 200 });
     }
     const interval = url.searchParams.get('interval');
     const intervals = { '15min': 15, '30min': 30, '1h': 60, '4h': 240 };
