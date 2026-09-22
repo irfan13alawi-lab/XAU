@@ -8,7 +8,7 @@ import { appendAudit, openDatabase, readState, runIdempotent, writeState } from 
 import { config } from './config.mjs';
 import { PaperWorker, UnavailableMarketDataProvider } from './worker.mjs';
 import { TwelveDataMarketDataProvider } from './providers/twelvedata-market-provider.mjs';
-import { isFreshMarketSnapshot } from './market-source.mjs';
+import { isAcceptedMarketSource, isFreshMarketSnapshot } from './market-source.mjs';
 import { executePaperScan } from './services/paper-scan-service.mjs';
 import { atr, calculateIndicators, ema } from './domain/indicators.mjs';
 import { evaluateRiskGuard } from './domain/risk.mjs';
@@ -512,9 +512,11 @@ export function dashboardSnapshot(db, now = new Date()) {
 
 function readinessReasons(snapshot) {
   const reasons = [];
+  const paperMarketFeedConnected = snapshot.market?.dataFreshness === 'FRESH'
+    && isAcceptedMarketSource(snapshot.market?.source);
   if (!snapshot.trading.paperMode) reasons.push('PAPER_MODE_DISABLED');
   if (!snapshot.worker.running) reasons.push('WORKER_NOT_READY');
-  if (!snapshot.broker.connected) reasons.push('BROKER_OFFLINE');
+  if (!snapshot.broker.connected && !paperMarketFeedConnected) reasons.push('BROKER_OFFLINE');
   if (snapshot.market.dataFreshness !== 'FRESH') reasons.push('MARKET_DATA_NOT_FRESH');
   if (snapshot.news.status !== 'HEALTHY') reasons.push('NEWS_NOT_READY');
   if (snapshot.risk.freshness !== 'FRESH') reasons.push('RISK_STATE_NOT_FRESH');
