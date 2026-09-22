@@ -112,6 +112,11 @@ if (paperStartingEquity != null && (!Number.isFinite(paperStartingEquity) || pap
 }
 const paperCurrency = String(process.env.NEXORA_PAPER_CURRENCY ?? 'USD').trim().toUpperCase();
 if (!/^[A-Z]{3,8}$/.test(paperCurrency)) throw new Error('NEXORA_PAPER_CURRENCY must be an uppercase currency code.');
+const paperMaxSpreadRaw = String(process.env.NEXORA_PAPER_MAX_SPREAD_PRICE ?? '').trim();
+const paperMaxSpreadPrice = paperMaxSpreadRaw === '' ? null : Number(paperMaxSpreadRaw);
+if (paperMaxSpreadPrice != null && (!Number.isFinite(paperMaxSpreadPrice) || paperMaxSpreadPrice <= 0)) {
+  throw new Error('NEXORA_PAPER_MAX_SPREAD_PRICE must be a positive number when configured.');
+}
 
 function safeProviderLabel(value) {
   const label = String(value ?? '').trim();
@@ -157,7 +162,7 @@ const risk = Object.freeze({
   minRiskReward: 2,
   minSignalScore: 70,
   minConfluencePct: 60,
-  maxSpreadPrice: null,
+  maxSpreadPrice: paperMaxSpreadPrice,
   newsBlackoutBeforeMinutes: 30,
   newsBlackoutAfterMinutes: 30,
 });

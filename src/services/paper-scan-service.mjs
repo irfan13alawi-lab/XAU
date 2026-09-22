@@ -75,8 +75,8 @@ function loadScanContext(db, now = new Date(), symbol = 'XAUUSD') {
   });
 
   const riskState = loadFreshRiskMetrics(db, now);
-  const instrument = readState(db, 'instrumentMetadata', null);
-  const paperCosts = readState(db, 'paperCosts', null);
+  const instrument = readState(db, `instrumentMetadata:${symbol}`, readState(db, 'instrumentMetadata', null));
+  const paperCosts = readState(db, `paperCosts:${symbol}`, readState(db, 'paperCosts', null));
   const account = riskState.freshness === 'FRESH'
     ? { equity: riskState.equity, currency: riskState.currency }
     : null;

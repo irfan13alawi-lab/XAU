@@ -42,6 +42,37 @@ function configuredSpread() {
   return spread != null && spread > 0 ? spread : null;
 }
 
+function paperInstrumentMetadata(symbol) {
+  const normalized = String(symbol).toUpperCase();
+  const specs = {
+    XAUUSD: { contractSize: 100, tickSize: 0.01, tickValue: 1, minLot: 0.01, lotStep: 0.01, maxLot: 100, digits: 2, minStopDistance: 0.1, tickValueCurrency: 'USD', quoteCurrency: 'USD' },
+    EURUSD: { contractSize: 100000, tickSize: 0.00001, tickValue: 1, minLot: 0.01, lotStep: 0.01, maxLot: 100, digits: 5, minStopDistance: 0.0001, tickValueCurrency: 'USD', quoteCurrency: 'USD' },
+    GBPUSD: { contractSize: 100000, tickSize: 0.00001, tickValue: 1, minLot: 0.01, lotStep: 0.01, maxLot: 100, digits: 5, minStopDistance: 0.0001, tickValueCurrency: 'USD', quoteCurrency: 'USD' },
+    USDJPY: { contractSize: 100000, tickSize: 0.001, tickValue: 0.64, minLot: 0.01, lotStep: 0.01, maxLot: 100, digits: 3, minStopDistance: 0.01, tickValueCurrency: 'USD', quoteCurrency: 'JPY' },
+  };
+  const spec = specs[normalized] ?? specs.XAUUSD;
+  return { symbol: normalized, source: 'PAPER_SIMULATION_ASSUMPTION', marketType: normalized === 'XAUUSD' ? 'SPOT_OTC' : 'FOREX_SPOT', ...spec };
+}
+
+function paperExecutionCosts(symbol) {
+  const instrument = paperInstrumentMetadata(symbol);
+  return {
+    source: 'PAPER_SIMULATION_ASSUMPTION',
+    symbol: instrument.symbol,
+    accountCurrency: 'USD',
+    contractSize: instrument.contractSize,
+    quoteToAccountRate: 1,
+    lotStep: instrument.lotStep,
+    minimumLot: instrument.minLot,
+    breakEvenOffsetPrice: 0,
+    fillLatencyMs: 0,
+    slippagePrice: 0,
+    commissionPerLot: 0,
+    swapPerLotPerDay: 0,
+    fillRatio: 1,
+  };
+}
+
 function providerSymbol(symbol) {
   const value = String(symbol ?? '').trim().toUpperCase();
   if (value === 'XAUUSD') return 'XAU/USD';
@@ -523,6 +554,10 @@ export class TwelveDataMarketDataProvider {
       marketOverviewBySymbol,
       errors,
       paperSpread: { type: 'FIXED_AROUND_MID', price: configuredSpread() },
+      instrumentMetadata: paperInstrumentMetadata(PRIMARY_SYMBOL),
+      instrumentMetadataBySymbol: Object.fromEntries(this.symbols.map((symbol) => [symbol, paperInstrumentMetadata(symbol)])),
+      paperCosts: paperExecutionCosts(PRIMARY_SYMBOL),
+      paperCostsBySymbol: Object.fromEntries(this.symbols.map((symbol) => [symbol, paperExecutionCosts(symbol)])),
     };
   }
 

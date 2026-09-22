@@ -47,6 +47,8 @@ test('Twelve Data adapter returns a VPS-safe XAU market contract with spot deriv
     assert.equal(payload.marketOverview.derivatives.fundingRate, null);
     assert.equal(payload.marketOverview.derivatives.openInterest, null);
     assert.equal(payload.marketOverview.derivatives.status, 'NOT_APPLICABLE');
+    assert.equal(payload.instrumentMetadata.tickSize, 0.01);
+    assert.equal(payload.paperCosts.minimumLot, 0.01);
   } finally {
     if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
     else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;

@@ -251,6 +251,14 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
   let repairedCandles = 0;
   db.exec('BEGIN IMMEDIATE');
   try {
+    const instrumentMetadataBySymbol = payload?.instrumentMetadataBySymbol ?? {};
+    const paperCostsBySymbol = payload?.paperCostsBySymbol ?? {};
+    for (const symbol of normalizedQuotes.map((item) => item.symbol)) {
+      if (instrumentMetadataBySymbol[symbol]) writeState(db, `instrumentMetadata:${symbol}`, instrumentMetadataBySymbol[symbol], receivedAt);
+      if (paperCostsBySymbol[symbol]) writeState(db, `paperCosts:${symbol}`, paperCostsBySymbol[symbol], receivedAt);
+    }
+    if (payload?.instrumentMetadata) writeState(db, 'instrumentMetadata', payload.instrumentMetadata, receivedAt);
+    if (payload?.paperCosts) writeState(db, 'paperCosts', payload.paperCosts, receivedAt);
     for (const { quote, symbol, observedTime, fresh } of normalizedQuotes) {
       // The legacy snapshot schema names the fresh status BROKER. Keep the
       // actual source in `source` so MARKET_DATA remains distinguishable.
@@ -452,8 +460,8 @@ function freshClosedM15(db, now, symbol = 'XAUUSD') {
   return candle.closed_at;
 }
 
-function executionCosts(db) {
-  return readState(db, 'paperCosts', null);
+function executionCosts(db, symbol = 'XAUUSD') {
+  return readState(db, `paperCosts:${symbol}`, readState(db, 'paperCosts', null));
 }
 
 function persistHealth(db, health, now, previousState) {
@@ -633,7 +641,7 @@ export class PaperWorker {
         const symbolQuote = quotesBySymbol[symbol] ?? (symbol === 'XAUUSD' ? quote : null);
         const result = reconcilePaperExecution(this.db, {
           quote: symbolQuote,
-          costs: executionCosts(this.db),
+          costs: executionCosts(this.db, symbol),
           paperMode: readState(this.db, 'paperMode', true) === true,
           now,
         });
