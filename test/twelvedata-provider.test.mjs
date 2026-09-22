@@ -97,6 +97,66 @@ test('Twelve Data adapter batches the four-symbol watchlist and advances one can
   }
 });
 
+test('Twelve Data adapter refreshes cached candle timeframes instead of freezing the first M15 batch', async () => {
+  const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
+  const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
+  const previousFetch = globalThis.fetch;
+  const previousNow = Date.now;
+  process.env.NEXORA_TWELVEDATA_API_KEY = 'test-key-not-a-credential';
+  process.env.NEXORA_PAPER_SPREAD_PRICE = '0.20';
+  let clock = previousNow();
+  Date.now = () => clock;
+  let candleRequests = 0;
+  let backgroundTick = null;
+  const previousSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (callback) => {
+    backgroundTick = callback;
+    return { unref() {} };
+  };
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.pathname.endsWith('/currency_conversion')) {
+      return new Response(JSON.stringify({ rate: '2030.50', timestamp: Math.floor(clock / 1000) }), { status: 200 });
+    }
+    candleRequests += 1;
+    const interval = url.searchParams.get('interval');
+    const minutes = { '15min': 15, '30min': 30, '1h': 60, '4h': 240 }[interval];
+    const values = candleRows(new Date(clock), minutes, 120).map((row) => ({
+      ...row,
+      close: (Number(row.close) + candleRequests).toFixed(2),
+    }));
+    return new Response(JSON.stringify({ values }), { status: 200 });
+  };
+  try {
+    const { TwelveDataMarketDataProvider } = await import('../src/providers/twelvedata-market-provider.mjs');
+    const provider = new TwelveDataMarketDataProvider({ symbols: ['XAUUSD'] });
+    const first = await provider.readMarketData(new Date(clock));
+    const firstM15ClosedAt = first.candlesBySymbol.XAUUSD.M15.at(-1).closedAt;
+    const firstM15Close = first.candlesBySymbol.XAUUSD.M15.at(-1).close;
+    await provider.readHealth(new Date(clock));
+    assert.equal(typeof backgroundTick, 'function');
+    for (let cycle = 0; cycle < 4; cycle += 1) {
+      clock += 2 * 60_000 + 1;
+      backgroundTick();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    const refreshed = await provider.readMarketData(new Date(clock));
+    const refreshedM15ClosedAt = refreshed.candlesBySymbol.XAUUSD.M15.at(-1).closedAt;
+    assert.equal(candleRequests, 5, 'initial M15 plus one request for each rotated timeframe');
+    assert.notEqual(refreshedM15ClosedAt, firstM15ClosedAt);
+    assert.notEqual(refreshed.candlesBySymbol.XAUUSD.M15.at(-1).close, firstM15Close);
+    provider.stop();
+  } finally {
+    Date.now = previousNow;
+    globalThis.setInterval = previousSetInterval;
+    if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
+    else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
+    if (previousSpread === undefined) delete process.env.NEXORA_PAPER_SPREAD_PRICE;
+    else process.env.NEXORA_PAPER_SPREAD_PRICE = previousSpread;
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('Twelve Data adapter accepts array and nested-data batch response shapes', async () => {
   const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
   const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;

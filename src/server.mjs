@@ -25,6 +25,15 @@ const DIST = resolve(ROOT, 'dist');
 const MIGRATIONS = resolve(ROOT, 'src', 'migrations');
 const MAX_BODY_BYTES = 32 * 1024;
 const TIMEFRAME_MS = Object.freeze({ M15: 15 * 60_000, M30: 30 * 60_000, H1: 60 * 60_000, H4: 4 * 60 * 60_000 });
+
+function candleDataFreshness(latest, timeframe, now) {
+  if (!latest) return 'UNAVAILABLE';
+  const closedAt = Date.parse(latest.closed_at ?? latest.closedAt ?? '');
+  const duration = TIMEFRAME_MS[timeframe];
+  const ageMs = now.getTime() - closedAt;
+  return Number.isFinite(closedAt) && Number.isFinite(duration)
+    && ageMs >= 0 && ageMs <= duration * 2 ? 'FRESH' : 'STALE';
+}
 const MIME_TYPES = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.css', 'text/css; charset=utf-8'],
@@ -331,8 +340,7 @@ function marketCandlesSnapshot(db, timeframe, now = new Date(), symbol = 'XAUUSD
   })).filter((item) => [item.open, item.high, item.low, item.close].every(Number.isFinite)
     && item.low <= Math.min(item.open, item.close) && item.high >= Math.max(item.open, item.close) && item.high >= item.low);
   const latest = candles.at(-1) ?? null;
-  const ageMs = latest ? now.getTime() - Date.parse(latest.closedAt) : Number.POSITIVE_INFINITY;
-  const dataFreshness = latest && ageMs >= 0 && ageMs <= duration * 2 ? 'FRESH' : latest ? 'STALE' : 'UNAVAILABLE';
+  const dataFreshness = candleDataFreshness(latest, timeframe, now);
   const closes = candles.map((item) => item.close);
   const atrValues = atr(candles, 14);
   const currentAtr = atrValues.at(-1) ?? null;
@@ -388,6 +396,7 @@ function marketWatchlistSnapshot(db, now = new Date()) {
       overview: marketOverview(latest),
       spreadPrice: latest?.bid != null && latest?.ask != null ? Number(latest.ask) - Number(latest.bid) : null,
       lastClosedCandleAt: lastCandle?.closed_at ?? null,
+      candleFreshness: candleDataFreshness(lastCandle, 'M15', now),
       candleSource: lastCandle?.source ?? null,
       candleQuality: lastCandle?.quality ?? null,
       reason: latest ? parseJson(latest.details_json).reason ?? null : 'NO_MARKET_SNAPSHOT',
@@ -441,6 +450,7 @@ export function dashboardSnapshot(db, now = new Date()) {
   const lastClosedCandle = db.prepare(`
     SELECT closed_at, source, quality FROM candles WHERE symbol = 'XAUUSD' AND timeframe = 'M15' ORDER BY closed_at DESC LIMIT 1
   `).get() ?? null;
+  const candleFreshness = candleDataFreshness(lastClosedCandle, 'M15', now);
   const news = readState(db, 'newsProvider', { status: 'OFFLINE', source: 'none', fetchedAt: null, reason: 'No news-calendar provider is configured.' });
   const newsFetchedAt = news.fetchedAt ? Date.parse(news.fetchedAt) : NaN;
   const newsFresh = news.status === 'HEALTHY' && Number.isFinite(newsFetchedAt)
@@ -461,13 +471,15 @@ export function dashboardSnapshot(db, now = new Date()) {
   const paperMode = readState(db, 'paperMode', config.paperMode);
   const botState = !brokerOnline ? 'BROKER OFFLINE'
     : !marketFresh ? latestMarket ? 'DATA STALE' : 'PAPER CHECKING'
-      : !newsFresh ? 'NEWS UNAVAILABLE'
+      : candleFreshness !== 'FRESH' ? 'CANDLE DATA BLOCKED'
+        : !newsFresh ? 'NEWS UNAVAILABLE'
           : !paperMode ? 'MONITORING ONLY'
           : entryPaused || riskState.freshness !== 'FRESH' || !riskGuard.allowed ? 'ENTRY PAUSED'
             : !workerReady ? 'PAPER CHECKING' : 'PAPER ON';
   const stateReason = !brokerOnline ? reason
     : !marketFresh ? 'Verified fresh broker quote is unavailable.'
-      : !newsFresh ? news.reason ?? 'News calendar is unavailable or stale; entries fail closed.'
+      : candleFreshness !== 'FRESH' ? 'Verified closed M15 candle data is unavailable or stale; entries fail closed.'
+        : !newsFresh ? news.reason ?? 'News calendar is unavailable or stale; entries fail closed.'
         : !paperMode ? 'Paper execution is off; only read-only monitoring is available.'
           : riskState.freshness !== 'FRESH' ? riskState.reason ?? 'Risk state is unavailable or stale; entries fail closed.'
               : !riskGuard.allowed ? riskGuard.reasons.join(', ')
@@ -508,6 +520,8 @@ export function dashboardSnapshot(db, now = new Date()) {
       source: latestMarket?.source ?? health.source,
       status: latestMarket?.status ?? marketDataHealth.status ?? 'UNAVAILABLE',
       dataFreshness: marketFresh ? 'FRESH' : latestMarket ? 'STALE' : 'UNAVAILABLE',
+      candleFreshness,
+      candleRequired: { timeframe: 'M15', maxAgeMs: TIMEFRAME_MS.M15 * 2 },
       quote: latestMarket ? {
         bid: latestMarket.bid,
         ask: latestMarket.ask,
@@ -590,6 +604,7 @@ function readinessReasons(snapshot) {
   if (!snapshot.worker.running) reasons.push('WORKER_NOT_READY');
   if (!snapshot.broker.connected && !paperMarketFeedConnected) reasons.push('BROKER_OFFLINE');
   if (snapshot.market.dataFreshness !== 'FRESH') reasons.push('MARKET_DATA_NOT_FRESH');
+  if (snapshot.market.candleFreshness !== 'FRESH') reasons.push('MARKET_CANDLES_NOT_FRESH');
   if (snapshot.news.status !== 'HEALTHY') reasons.push('NEWS_NOT_READY');
   if (snapshot.risk.freshness !== 'FRESH') reasons.push('RISK_STATE_NOT_FRESH');
   else reasons.push(...snapshot.risk.reasons);

@@ -403,6 +403,7 @@ export class TwelveDataMarketDataProvider {
     const definition = TIMEFRAMES[timeframe];
     if (!definition) return;
     let twelveDataError = null;
+    const refreshedSymbols = new Set();
     if (key && Date.now() >= this.#marketDataRetryAt) {
       const url = new URL('https://api.twelvedata.com/time_series');
       url.search = new URLSearchParams({
@@ -418,7 +419,10 @@ export class TwelveDataMarketDataProvider {
           const response = responseForSymbol(body, symbol, this.symbols.length);
           const candles = candlesFromResponse(response, symbol, timeframe, now);
           if (!this.#candleCache.has(symbol)) this.#candleCache.set(symbol, new Map());
-          if (candles.length) this.#candleCache.get(symbol).set(timeframe, { value: candles, fetchedAt: Date.now(), provider: 'TwelveData' });
+          if (candleBatchIsFresh(candles, timeframe, now)) {
+            this.#candleCache.get(symbol).set(timeframe, { value: candles, fetchedAt: Date.now(), provider: 'TwelveData' });
+            refreshedSymbols.add(symbol);
+          }
         }
       } catch (error) {
         twelveDataError = error;
@@ -426,14 +430,19 @@ export class TwelveDataMarketDataProvider {
       }
     }
     for (const symbol of this.symbols) {
-      const cached = this.#candleCache.get(symbol)?.get(timeframe);
-      if (cached?.value?.length) continue;
+      // A cached timeframe is only a fallback for a failed refresh. Never skip
+      // the provider request just because old candles exist; doing so froze
+      // M15 at the first deployment and made every later scan stale.
+      if (refreshedSymbols.has(symbol)) continue;
       try {
         const biquoteInterval = ({ '15min': '15m', '30min': '30m', '1h': '1h', '4h': '4h' })[definition[0]];
         const body = await getJson(`https://biquote.io/api/${normalizedSymbol(symbol)}/ohlc?interval=${biquoteInterval}&limit=${CANDLE_COUNT}`, signal);
         const candles = biquoteCandlesFromResponse(body, symbol, timeframe, now);
         if (!this.#candleCache.has(symbol)) this.#candleCache.set(symbol, new Map());
-        if (candles.length) this.#candleCache.get(symbol).set(timeframe, { value: candles, fetchedAt: Date.now(), provider: 'Biquote' });
+        if (candles.length) {
+          this.#candleCache.get(symbol).set(timeframe, { value: candles, fetchedAt: Date.now(), provider: 'Biquote' });
+          refreshedSymbols.add(symbol);
+        }
       } catch (error) {
         twelveDataError = error;
       }
@@ -506,7 +515,7 @@ export class TwelveDataMarketDataProvider {
     if (!hasCachedCandles) {
       const timeframe = TIMEFRAME_NAMES[this.#candleCursor % TIMEFRAME_NAMES.length];
       this.#candleCursor += 1;
-      this.#lastCandleCycleAt = Date.now();
+      this.#lastCandleCycleAt = now.getTime();
       try {
         await this.#readCandleBatch(timeframe, now, signal);
       } catch (error) {
@@ -591,4 +600,11 @@ function biquoteCandlesFromResponse(body, symbol, timeframe, now) {
       source: SOURCE,
     };
   }).filter(Boolean).sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt));
+}
+
+function candleBatchIsFresh(candles, timeframe, now) {
+  const intervalMs = TIMEFRAMES[timeframe]?.[1];
+  const latestClosedAt = Date.parse(candles.at(-1)?.closedAt ?? '');
+  return candles.length > 0 && Number.isFinite(intervalMs) && Number.isFinite(latestClosedAt)
+    && now.getTime() >= latestClosedAt && now.getTime() - latestClosedAt <= intervalMs * 2;
 }

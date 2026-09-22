@@ -35,6 +35,10 @@ test('dashboard enables paper entries only when every readiness gate and worker 
       INSERT INTO market_snapshots (id, symbol, source, status, bid, ask, last, observed_at, received_at, details_json)
       VALUES (?, 'XAUUSD', 'BROKER', 'BROKER', '2500.00', '2500.50', '2500.25', ?, ?, '{}')
     `).run('fresh-test-quote', at, at);
+    telemetryDb.prepare(`
+      INSERT INTO candles (symbol, timeframe, closed_at, open_price, high_price, low_price, close_price, tick_volume, source, quality)
+      VALUES ('XAUUSD', 'M15', ?, '2500.00', '2501.00', '2499.00', '2500.50', 100, 'BROKER', 'VERIFIED_CLOSED')
+    `).run(at);
 
     let snapshot = dashboardSnapshot(telemetryDb, now);
     assert.equal(snapshot.trading.state, 'PAPER ON');
@@ -745,7 +749,7 @@ test('resume still requires fresh market and news data when broker health is gre
   const body = await response.json();
   assert.equal(response.status, 409);
   assert.equal(body.error, 'READINESS_NOT_MET');
-  assert.deepEqual(body.readinessReasons, ['MARKET_DATA_NOT_FRESH', 'NEWS_NOT_READY', 'RISK_STATE_NOT_FRESH']);
+  assert.deepEqual(body.readinessReasons, ['MARKET_DATA_NOT_FRESH', 'MARKET_CANDLES_NOT_FRESH', 'NEWS_NOT_READY', 'RISK_STATE_NOT_FRESH']);
   assert.equal(readState(db, 'entryPaused'), true);
 
   db.prepare('DELETE FROM broker_health').run();

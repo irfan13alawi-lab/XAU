@@ -681,12 +681,19 @@
         ? data.trading?.paperMode ? 'Turn paper mode OFF' : 'Turn paper mode ON'
         : `Paper mode: ${data.trading?.paperMode ? 'ON' : 'OFF'}`;
       paperButton.disabled = !control.operatorAuthenticated;
-      paperButton.title = data.trading?.paperMode
-        ? 'Turning paper mode off pauses new entries; monitoring stays read-only.'
-        : 'Turning paper mode on does not resume entries; readiness and a separate operator resume are required.';
+      paperButton.title = !control.operatorAuthenticated
+        ? 'Enter the local control token and choose Unlock controls first.'
+        : data.trading?.paperMode
+          ? 'Turning paper mode off pauses new entries; monitoring stays read-only.'
+          : 'Turning paper mode on does not resume entries; readiness and a separate operator resume are required.';
     }
     const scanButton = $('#scanButton');
-    if (scanButton) scanButton.disabled = !control.operatorAuthenticated;
+    if (scanButton) {
+      scanButton.disabled = !control.operatorAuthenticated;
+      scanButton.title = !control.operatorAuthenticated
+        ? 'Enter the local control token and choose Unlock controls first.'
+        : trading.stateReason ?? 'Run one paper scan using the latest verified M15 candle.';
+    }
     const researchButton = $('#researchButton');
     const researchDatasetName = $('#researchDatasetName');
     if (researchButton) researchButton.disabled = !control.operatorAuthenticated;
@@ -713,7 +720,7 @@
     setText('#dailyLossGuard', risk.dailyLossR == null ? 'UNKNOWN' : Number(risk.dailyLossR) < Number(risk.limits?.dailyLossLimitR ?? 3) ? 'WITHIN LIMIT' : 'PAUSED');
     setText('#drawdownGuard', risk.drawdownPct == null ? 'UNKNOWN' : Number(risk.drawdownPct) < Number(risk.limits?.drawdownPausePct ?? 10) ? 'WITHIN LIMIT' : 'PAUSED');
     setText('#gateReason', trading.stateReason ?? 'No complete, fresh candle set');
-    setText('#dataGate', data.market?.dataFreshness ?? 'Data unavailable');
+    setText('#dataGate', `${data.market?.dataFreshness ?? 'Data unavailable'} · M15 ${data.market?.candleFreshness ?? 'UNAVAILABLE'}`);
     setText('#newsGate', 'News unknown');
     setText('#riskGate', risk.freshness !== 'FRESH' ? `Risk ${String(risk.freshness ?? 'unavailable').toLowerCase()}`
       : risk.reasons?.length ? `Risk blocked · ${risk.reasons.join(', ')}`
@@ -740,6 +747,7 @@
       if (!data.worker?.running) readinessReasons.push('worker not ready');
       if (!broker.connected) readinessReasons.push('broker offline');
       if (data.market?.dataFreshness !== 'FRESH') readinessReasons.push('fresh market quote unavailable');
+      if (data.market?.candleFreshness !== 'FRESH') readinessReasons.push('fresh M15 candle unavailable');
       if (data.news?.status !== 'HEALTHY') readinessReasons.push('news calendar unavailable or stale');
       if (risk.freshness !== 'FRESH') readinessReasons.push('risk state unavailable or stale');
       else if (risk.reasons?.length) readinessReasons.push(...risk.reasons.map((reason) => reason.toLowerCase().replaceAll('_', ' ')));
@@ -747,7 +755,9 @@
       const label = trading.entryPaused ? canResume ? 'Resume entries' : 'Waiting for readiness' : 'Pause entries';
       pauseButton.replaceChildren(makeElement('span', 'pause-icon', trading.entryPaused ? '▶' : 'Ⅱ'), document.createTextNode(` ${label}`));
       pauseButton.disabled = !control.operatorAuthenticated || Boolean(trading.entryPaused && !canResume);
-      pauseButton.title = trading.entryPaused && !canResume ? `Resume blocked: ${readinessReasons.join(', ')}.` : trading.stateReason ?? '';
+      pauseButton.title = !control.operatorAuthenticated
+        ? 'Enter the local control token and choose Unlock controls first.'
+        : trading.entryPaused && !canResume ? `Resume blocked: ${readinessReasons.join(', ')}.` : trading.stateReason ?? '';
     }
   }
 
