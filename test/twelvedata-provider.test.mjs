@@ -126,3 +126,38 @@ test('Twelve Data adapter accepts array and nested-data batch response shapes', 
     globalThis.fetch = previousFetch;
   }
 });
+
+test('Twelve Data adapter falls back to a single quote when a batch response omits XAUUSD', async () => {
+  const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
+  const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
+  const previousFetch = globalThis.fetch;
+  process.env.NEXORA_TWELVEDATA_API_KEY = 'test-key-not-a-credential';
+  process.env.NEXORA_PAPER_SPREAD_PRICE = '0.20';
+  const now = new Date('2026-09-22T00:00:00.000Z');
+  let calls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    calls += 1;
+    if (url.pathname.endsWith('/currency_conversion')) {
+      if (url.searchParams.get('symbol')?.includes(',')) {
+        return new Response(JSON.stringify({ 'EUR/USD': { rate: '1.08', timestamp: Math.floor(now.getTime() / 1000) } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ rate: '2030.50', timestamp: Math.floor(now.getTime() / 1000) }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ values: [] }), { status: 200 });
+  };
+  try {
+    const { TwelveDataMarketDataProvider } = await import('../src/providers/twelvedata-market-provider.mjs');
+    const provider = new TwelveDataMarketDataProvider({ symbols: ['XAUUSD', 'EURUSD'] });
+    const health = await provider.readHealth(now);
+    assert.equal(health.status, 'HEALTHY');
+    assert.equal(calls, 2);
+    provider.stop();
+  } finally {
+    if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
+    else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
+    if (previousSpread === undefined) delete process.env.NEXORA_PAPER_SPREAD_PRICE;
+    else process.env.NEXORA_PAPER_SPREAD_PRICE = previousSpread;
+    globalThis.fetch = previousFetch;
+  }
+});

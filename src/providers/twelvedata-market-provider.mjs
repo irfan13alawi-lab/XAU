@@ -249,6 +249,7 @@ export class TwelveDataMarketDataProvider {
     url.search = new URLSearchParams({ symbol: missing.map(providerSymbol).join(','), amount: '1', apikey: key, timezone: 'UTC' }).toString();
     const body = await getJson(url, signal);
     const quotes = { ...cachedQuotes };
+    let fallbackError = null;
     for (const symbol of missing) {
       const quote = quoteFromResponse(responseForSymbol(body, symbol, missing.length), symbol, now);
       if (quote) {
@@ -256,7 +257,21 @@ export class TwelveDataMarketDataProvider {
         quotes[symbol] = quote;
       }
     }
-    if (!quotes[PRIMARY_SYMBOL]) throw errorWithCode(configuredSpread() == null ? 'PAPER_SPREAD_NOT_CONFIGURED' : 'MARKET_DATA_QUOTE_INVALID');
+    const unresolved = missing.filter((symbol) => !quotes[symbol]);
+    for (const symbol of unresolved) {
+      try {
+        const singleUrl = new URL('https://api.twelvedata.com/currency_conversion');
+        singleUrl.search = new URLSearchParams({ symbol: providerSymbol(symbol), amount: '1', apikey: key, timezone: 'UTC' }).toString();
+        const singleBody = await getJson(singleUrl, signal);
+        const quote = quoteFromResponse(responseForSymbol(singleBody, symbol, 1), symbol, now);
+        if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+        this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
+        quotes[symbol] = quote;
+      } catch (error) {
+        fallbackError = error;
+      }
+    }
+    if (!quotes[PRIMARY_SYMBOL]) throw fallbackError ?? errorWithCode(configuredSpread() == null ? 'PAPER_SPREAD_NOT_CONFIGURED' : 'MARKET_DATA_QUOTE_INVALID');
     this.#recordSuccess();
     return quotes;
   }

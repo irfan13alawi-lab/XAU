@@ -23,7 +23,7 @@ const TELEMETRY_ERROR_CLASSES = new Set([
   'DEPENDENCY_TIMEOUT', 'SQLITE_BUSY', 'SQLITE_CORRUPT', 'SQLITE_IOERR',
   'BROKER_REJECTED', 'RATE_LIMITED', 'TYPE_ERROR', 'UNCLASSIFIED',
 ]);
-const MARKET_SNAPSHOT_REFRESH_MS = 60_000;
+const MARKET_SNAPSHOT_REFRESH_MS = 2 * 60_000;
 
 function elapsedMilliseconds(start, end) {
   const elapsed = Number(end) - Number(start);
