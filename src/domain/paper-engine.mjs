@@ -5,6 +5,7 @@ import {
 import { activeSessions } from './market-sessions.mjs';
 
 export function evaluatePaperScan({
+  symbol = 'XAUUSD',
   market,
   candlesByTimeframe,
   newsState,
@@ -90,7 +91,7 @@ export function evaluatePaperScan({
   return {
     status: gate.status,
     accepted: gate.accepted,
-    symbol: 'XAUUSD',
+    symbol,
     direction: gate.direction,
     score: gate.score,
     confluencePct: gate.confluencePct,
