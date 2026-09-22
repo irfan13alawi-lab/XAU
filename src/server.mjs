@@ -8,7 +8,7 @@ import { appendAudit, openDatabase, readState, runIdempotent, writeState } from 
 import { config } from './config.mjs';
 import { PaperWorker, UnavailableMarketDataProvider } from './worker.mjs';
 import { TwelveDataMarketDataProvider } from './providers/twelvedata-market-provider.mjs';
-import { isAcceptedMarketSource, isFreshMarketSnapshot } from './market-source.mjs';
+import { isAcceptedMarketSource, isFreshMarketSnapshot, MARKET_QUOTE_MAX_AGE_MS } from './market-source.mjs';
 import { executePaperScan } from './services/paper-scan-service.mjs';
 import { atr, calculateIndicators, ema } from './domain/indicators.mjs';
 import { evaluateRiskGuard } from './domain/risk.mjs';
@@ -354,8 +354,8 @@ function marketWatchlistSnapshot(db, now = new Date()) {
     const receivedAt = latest?.received_at ? Date.parse(latest.received_at) : NaN;
     const fresh = isFreshMarketSnapshot(latest)
       && Number.isFinite(observedAt) && Number.isFinite(receivedAt)
-      && now.getTime() >= observedAt && now.getTime() - observedAt <= 30_000
-      && now.getTime() >= receivedAt && now.getTime() - receivedAt <= 30_000;
+      && now.getTime() >= observedAt && now.getTime() - observedAt <= MARKET_QUOTE_MAX_AGE_MS
+      && now.getTime() >= receivedAt && now.getTime() - receivedAt <= MARKET_QUOTE_MAX_AGE_MS;
     const lastCandle = db.prepare(`
       SELECT closed_at, source, quality FROM candles WHERE symbol = ? AND timeframe = 'M15'
       ORDER BY closed_at DESC LIMIT 1
@@ -415,9 +415,9 @@ export function dashboardSnapshot(db, now = new Date()) {
     && Number.isFinite(receivedAt)
     && Number.isFinite(observedAt)
     && now.getTime() >= receivedAt
-    && now.getTime() - receivedAt <= 30_000
+    && now.getTime() - receivedAt <= MARKET_QUOTE_MAX_AGE_MS
     && now.getTime() >= observedAt
-    && now.getTime() - observedAt <= 30_000;
+    && now.getTime() - observedAt <= MARKET_QUOTE_MAX_AGE_MS;
   const lastClosedCandle = db.prepare(`
     SELECT closed_at, source, quality FROM candles WHERE symbol = 'XAUUSD' AND timeframe = 'M15' ORDER BY closed_at DESC LIMIT 1
   `).get() ?? null;

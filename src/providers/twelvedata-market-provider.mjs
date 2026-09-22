@@ -1,4 +1,5 @@
 import { config } from '../config.mjs';
+import { MARKET_QUOTE_MAX_AGE_MS } from '../market-source.mjs';
 
 const SOURCE = 'MARKET_DATA';
 const PRIMARY_SYMBOL = 'XAUUSD';
@@ -192,7 +193,7 @@ export class TwelveDataMarketDataProvider {
     try {
       const quote = await this.#readQuote(PRIMARY_SYMBOL, now, signal);
       const ageMs = now.getTime() - Date.parse(quote.observedAt);
-      return { source: SOURCE, status: ageMs >= 0 && ageMs <= 30_000 ? 'HEALTHY' : 'STALE', checkedAt: now.toISOString(), reason: ageMs <= 30_000 ? null : 'MARKET_DATA_QUOTE_STALE' };
+      return { source: SOURCE, status: ageMs >= 0 && ageMs <= MARKET_QUOTE_MAX_AGE_MS ? 'HEALTHY' : 'STALE', checkedAt: now.toISOString(), reason: ageMs <= MARKET_QUOTE_MAX_AGE_MS ? null : 'MARKET_DATA_QUOTE_STALE' };
     } catch (error) {
       return { source: SOURCE, status: 'OFFLINE', checkedAt: now.toISOString(), reason: /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code ?? '') ? error.code : 'MARKET_DATA_PROVIDER_ERROR' };
     }

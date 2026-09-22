@@ -4,7 +4,7 @@ import { appendAudit, readState, writeState } from './database.mjs';
 import { executePaperScan } from './services/paper-scan-service.mjs';
 import { reconcilePaperExecution } from './services/paper-lifecycle-service.mjs';
 import { capturePaperEquitySnapshot } from './services/paper-equity-service.mjs';
-import { isAcceptedMarketSource, isFreshMarketSnapshot } from './market-source.mjs';
+import { isAcceptedMarketSource, isFreshMarketSnapshot, MARKET_QUOTE_MAX_AGE_MS } from './market-source.mjs';
 
 const TIMEFRAMES = new Set(['M15', 'M30', 'H1', 'H4']);
 const TIMEOUT_MS = 5_000;
@@ -197,7 +197,7 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
     }
     const observedTime = Date.parse(quote.observedAt ?? '');
     if (!Number.isFinite(observedTime)) throw new TypeError('Provider quote must include a valid observation timestamp.');
-    return { quote, symbol, observedTime, fresh: now.getTime() - observedTime >= 0 && now.getTime() - observedTime <= 30_000 };
+    return { quote, symbol, observedTime, fresh: now.getTime() - observedTime >= 0 && now.getTime() - observedTime <= MARKET_QUOTE_MAX_AGE_MS };
   });
   const primary = normalizedQuotes.find((item) => item.symbol === 'XAUUSD') ?? normalizedQuotes[0];
   const receivedAt = now.toISOString();
@@ -358,7 +358,7 @@ function freshClosedM15(db, now, symbol = 'XAUUSD') {
   const observed = Date.parse(quote?.observed_at ?? '');
   const received = Date.parse(quote?.received_at ?? '');
   if (!isFreshMarketSnapshot(quote) || !Number.isFinite(observed) || !Number.isFinite(received)
-    || now.getTime() < observed || now.getTime() - observed > 30_000 || now.getTime() < received || now.getTime() - received > 30_000) return null;
+    || now.getTime() < observed || now.getTime() - observed > MARKET_QUOTE_MAX_AGE_MS || now.getTime() < received || now.getTime() - received > MARKET_QUOTE_MAX_AGE_MS) return null;
   return candle.closed_at;
 }
 
