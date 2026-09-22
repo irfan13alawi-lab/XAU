@@ -48,8 +48,8 @@ jobs:
     steps:
       - name: Configure SSH
         env:
-          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
-          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+          VPS_SSH_KEY: \${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: \${{ secrets.VPS_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           test -n "$VPS_SSH_KEY"
@@ -61,18 +61,18 @@ jobs:
 
       - name: Deploy exact commit and verify health
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ secrets.VPS_USER }}
-          DEPLOY_SHA: ${{ github.sha }}
-          NEXORA_TWELVEDATA_API_KEY: ${{ secrets.NEXORA_TWELVEDATA_API_KEY }}
+          VPS_HOST: \${{ secrets.VPS_HOST }}
+          VPS_USER: \${{ secrets.VPS_USER }}
+          DEPLOY_SHA: \${{ github.sha }}
+          NEXORA_TWELVEDATA_API_KEY: \${{ secrets.NEXORA_TWELVEDATA_API_KEY }}
         run: |
           set -euo pipefail
           test -n "$VPS_HOST"
           test -n "$VPS_USER"
           case "$DEPLOY_SHA" in
-            (*[!0-9a-f]*) echo "Invalid commit SHA"; exit 1 \;;
+            (*[!0-9a-f]*) echo "Invalid commit SHA"; exit 1 ;;
           esac
-          if [ -n "${NEXORA_TWELVEDATA_API_KEY:-}" ]; then
+          if [ -n "\${NEXORA_TWELVEDATA_API_KEY:-}" ]; then
             printf '%s' "$NEXORA_TWELVEDATA_API_KEY" | ssh -i "$HOME/.ssh/nexora_deploy" \
               -o IdentitiesOnly=yes \
               -o BatchMode=yes \
@@ -94,38 +94,53 @@ jobs:
           git -C "$APP_PATH" cat-file -e "$DEPLOY_SHA^{commit}"
           git -C "$APP_PATH" reset --hard "$DEPLOY_SHA"
 
+          test -f "$APP_PATH/.env" || : > "$APP_PATH/.env"
+          upsert_env() {
+            key="$1"
+            value="$2"
+            tmp_file="$(mktemp)"
+            KEY="$key" VALUE="$value" awk '
+              BEGIN { replaced = 0 }
+              $0 ~ "^" ENVIRON["KEY"] "=" {
+                print ENVIRON["KEY"] "=" ENVIRON["VALUE"]
+                replaced = 1
+                next
+              }
+              { print }
+              END {
+                if (!replaced) print ENVIRON["KEY"] "=" ENVIRON["VALUE"]
+              }
+            ' "$APP_PATH/.env" > "$tmp_file"
+            chmod 600 "$tmp_file"
+            mv "$tmp_file" "$APP_PATH/.env"
+          }
+          upsert_env NEXORA_MARKET_SOURCE twelvedata
+          upsert_env NEXORA_SYMBOLS XAUUSD,EURUSD,GBPUSD,USDJPY
+          upsert_env NEXORA_PAPER_SPREAD_PRICE 0.20
+          upsert_env PAPER_MODE true
+          upsert_env LIVE_TRADING_ENABLED false
           if [ -s "$APP_PATH/.nexora_twelvedata_api_key" ]; then
-            test -f "$APP_PATH/.env" || : > "$APP_PATH/.env"
-            upsert_env() {
-              key="$1"
-              value="$2"
-              tmp_file="$(mktemp)"
-              KEY="$key" VALUE="$value" awk '
-                BEGIN { replaced = 0 }
-                $0 ~ "^" ENVIRON["KEY"] "=" {
-                  print ENVIRON["KEY"] "=" ENVIRON["VALUE"]
-                  replaced = 1
-                  next
-                }
-                { print }
-                END {
-                  if (!replaced) print ENVIRON["KEY"] "=" ENVIRON["VALUE"]
-                }
-              ' "$APP_PATH/.env" > "$tmp_file"
-              chmod 600 "$tmp_file"
-              mv "$tmp_file" "$APP_PATH/.env"
-            }
             TWELVEDATA_API_KEY="$(cat "$APP_PATH/.nexora_twelvedata_api_key")"
-            upsert_env NEXORA_MARKET_SOURCE twelvedata
             upsert_env NEXORA_TWELVEDATA_API_KEY "$TWELVEDATA_API_KEY"
-            upsert_env NEXORA_SYMBOLS XAUUSD,EURUSD,GBPUSD,USDJPY
-            upsert_env NEXORA_PAPER_SPREAD_PRICE 0.20
-            upsert_env PAPER_MODE true
-            upsert_env LIVE_TRADING_ENABLED false
             unset TWELVEDATA_API_KEY
-            chmod 600 "$APP_PATH/.env"
+          else
+            sed -i '/^NEXORA_TWELVEDATA_API_KEY=/d' "$APP_PATH/.env"
           fi
-          docker restart "$CONTAINER_NAME"
+          chmod 600 "$APP_PATH/.env"
+
+          # Recreate the container so updated .env values become process environment.
+          # The application data lives in APP_PATH, so removing the old container does
+          # not remove the SQLite database or deployed source files.
+          docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+          docker run -d \
+            --name "$CONTAINER_NAME" \
+            --restart unless-stopped \
+            --network host \
+            --env-file "$APP_PATH/.env" \
+            -v "$APP_PATH:/app" \
+            -w /app \
+            node:24-bookworm-slim \
+            node --env-file-if-exists=.env src/server.mjs
 
           for attempt in $(seq 1 30); do
             if curl -fsS --max-time 3 http://127.0.0.1:18087/healthz | grep -q '"liveness":"ok"'; then
