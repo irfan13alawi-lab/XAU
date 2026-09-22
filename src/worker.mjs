@@ -511,9 +511,14 @@ export class PaperWorker {
       };
     } catch (error) {
       providerDurationMs ??= elapsedMilliseconds(startedAt, this.monotonicNow());
+      const previousFetchedAt = Date.parse(previous.fetchedAt ?? '');
+      const cachedCalendarFresh = previous.status === 'HEALTHY'
+        && Number.isFinite(previousFetchedAt)
+        && now.getTime() >= previousFetchedAt
+        && now.getTime() - previousFetchedAt <= 30 * 60_000;
       const failed = {
-        status: 'OFFLINE', source: previous.source ?? 'unknown', fetchedAt: previous.fetchedAt ?? null,
-        reason: error.code === 'DEPENDENCY_TIMEOUT' ? 'NEWS_PROVIDER_TIMEOUT' : 'NEWS_PROVIDER_UNAVAILABLE',
+        status: cachedCalendarFresh ? 'HEALTHY' : 'OFFLINE', source: previous.source ?? 'unknown', fetchedAt: previous.fetchedAt ?? null,
+        reason: cachedCalendarFresh ? null : error.code === 'DEPENDENCY_TIMEOUT' ? 'NEWS_PROVIDER_TIMEOUT' : 'NEWS_PROVIDER_UNAVAILABLE',
       };
       const at = now.toISOString();
       writeState(this.db, 'newsProvider', failed, at);

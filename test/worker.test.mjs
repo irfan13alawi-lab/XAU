@@ -304,21 +304,28 @@ test('news-provider outage holds entry readiness, preserves the last timestamp, 
     failNews = true;
     now = new Date(now.getTime() + 60_000);
     const outage = await worker.tick();
-    assert.equal(outage.news.status, 'OFFLINE');
-    assert.equal(outage.news.reason, 'NEWS_PROVIDER_UNAVAILABLE');
+    assert.equal(outage.news.status, 'HEALTHY');
+    assert.equal(outage.news.reason, null);
     assert.equal(outage.news.fetchedAt, lastKnownFetchedAt);
-    assert.equal(outage.telemetry.dependencies.newsCalendar.status, 'OFFLINE');
+    assert.equal(outage.telemetry.dependencies.newsCalendar.status, 'HEALTHY');
     assert.equal(outage.telemetry.dependencies.newsCalendar.attempted, true);
     assert.equal(JSON.stringify(outage).includes('DO_NOT_EXPOSE_NEWS_SECRET'), false);
-    assert.equal(readState(db, 'newsProvider').status, 'OFFLINE');
+    assert.equal(readState(db, 'newsProvider').status, 'HEALTHY');
 
     now = new Date(now.getTime() + 15_000);
     const backedOff = await worker.tick();
-    assert.equal(backedOff.news.status, 'OFFLINE');
+    assert.equal(backedOff.news.status, 'HEALTHY');
     assert.equal(backedOff.telemetry.dependencies.newsCalendar.status, 'CACHED');
     assert.equal(backedOff.telemetry.dependencies.newsCalendar.attempted, false);
     assert.equal(backedOff.telemetry.dependencies.newsCalendar.durationMs, null);
     assert.equal(newsCalls, 2);
+
+    now = new Date(now.getTime() + 31 * 60_000);
+    const stale = await worker.tick();
+    assert.equal(stale.news.status, 'OFFLINE');
+    assert.equal(stale.news.reason, 'NEWS_PROVIDER_UNAVAILABLE');
+    assert.equal(readState(db, 'newsProvider').status, 'OFFLINE');
+    assert.equal(newsCalls, 3);
   } finally {
     db.close();
   }
