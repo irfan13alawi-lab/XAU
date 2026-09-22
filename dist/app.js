@@ -582,6 +582,30 @@
       makeElement('small', 'research-caveat', `Report ${String(result.runId ?? '').slice(0, 12)}… · report SHA-256 ${String(result.reportSha256 ?? '—').slice(0, 12)}… · build ${result.buildId ?? '—'} · schema ${result.schemaVersionUsed ?? '—'} · strategy ${result.strategyVersion ?? '—'} · saved locally · historical replay, not a forecast · live trading ${result.liveTradingEnabled ? 'enabled' : 'disabled'}.`));
   }
 
+  function renderWatchlist(markets = []) {
+    const container = $('#marketWatchlist');
+    if (!container) return;
+    container.replaceChildren();
+    if (!Array.isArray(markets) || !markets.length) {
+      container.append(makeElement('div', 'empty-state', 'No verified market-data snapshots yet.'));
+      return;
+    }
+    for (const item of markets) {
+      const freshness = item.dataFreshness ?? 'UNAVAILABLE';
+      const card = makeElement('article', `watch-card ${freshness === 'FRESH' ? 'fresh' : freshness === 'STALE' ? 'stale' : ''}`);
+      const top = makeElement('div', 'watch-card-top');
+      top.append(makeElement('strong', '', item.symbol ?? '—'));
+      top.append(makeElement('small', '', freshness));
+      const quote = item.quote ?? {};
+      const priceRow = makeElement('div', 'watch-card-price');
+      priceRow.append(makeElement('span', '', quote.last == null ? '—' : price(quote.last)));
+      priceRow.append(makeElement('small', '', item.spreadPrice == null ? 'spread —' : `spread ${price(item.spreadPrice)}`));
+      const meta = makeElement('div', 'watch-card-meta', `${item.source ?? 'none'} · observed ${timeOf(quote.observedAt)} · M15 ${item.lastClosedCandleAt ? timeOf(item.lastClosedCandleAt) : '—'}`);
+      card.append(top, priceRow, meta);
+      container.append(card);
+    }
+  }
+
   function renderDashboard(data, audit, mtf) {
     dashboardState = data;
     const trading = data.trading ?? {};
@@ -688,6 +712,7 @@
     setText('#gateCount', '0 of 4 timeframes available');
     setText('#confluenceScore', '—/100');
     renderMarket(data.market);
+    renderWatchlist(data.markets);
     renderMtf(mtf, data);
     renderPositions(data.positions, data.orders, Boolean(data.control?.operatorAuthenticated), data.market?.dataFreshness === 'FRESH');
     renderAudit(audit);

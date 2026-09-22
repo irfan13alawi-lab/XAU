@@ -178,6 +178,20 @@ h3 { font-size: 16px; margin: 14px 0 9px; }
 .research-fold span { font-size:12px; }
 .research-caveat { color:var(--muted-2); font-size:12px; }
 @media (max-width:820px) { .research-controls { grid-template-columns:1fr; }.research-controls label,.research-controls small { grid-column:auto; }.research-heading { flex-direction:column; } }
+
+.watchlist-panel { margin: 18px 0; }
+.market-watchlist { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.watch-card { border: 1px solid var(--line); background: rgba(255,255,255,.025); border-radius: 6px; padding: 12px; min-width: 0; }
+.watch-card-top, .watch-card-price { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.watch-card-top strong { color: var(--text); font: 600 13px var(--mono); }
+.watch-card-top small { color: var(--muted-2); font: 10px var(--mono); }
+.watch-card-price { margin-top: 12px; color: var(--text); font: 600 17px var(--mono); }
+.watch-card-price small { color: var(--muted); font-size: 10px; font-weight: 400; }
+.watch-card-meta { margin-top: 8px; color: var(--muted-2); font: 10px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.watch-card.fresh { border-color: rgba(53, 214, 149, .45); }
+.watch-card.stale { border-color: rgba(245, 175, 68, .45); }
+@media (max-width:820px) { .market-watchlist { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width:480px) { .market-watchlist { grid-template-columns: 1fr; } }
 .close-paper-button { color:var(--amber); border-color:rgba(240,186,107,.35); white-space:nowrap; font-size:14px; }
 .close-paper-button:hover:not(:disabled) { color:var(--amber); border-color:var(--amber); background:rgba(240,186,107,.08); }
 .close-paper-button:disabled { cursor:not-allowed; opacity:.48; }
