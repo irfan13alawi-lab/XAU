@@ -132,7 +132,7 @@ test('successful bind initializes the database and then serves paper-only health
     assert.doesNotMatch(JSON.stringify(requestLog), /must-not-appear-in-logs|token=/i);
     const health = body;
     assert.equal(health.liveness, 'ok');
-    assert.equal(health.schemaVersion, 7);
+    assert.equal(health.schemaVersion, 8);
     assert.equal(health.readiness, 'not_ready');
     assert.equal(health.controlActionsAvailable, false);
     const exited = once(child, 'exit');

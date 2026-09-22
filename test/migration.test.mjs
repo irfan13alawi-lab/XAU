@@ -8,7 +8,7 @@ import { test } from 'node:test';
 
 const migrationsDirectory = fileURLToPath(new URL('../src/migrations/', import.meta.url));
 
-test('schema v5 database upgrades additively to v7 with audit, notification outbox, and worker telemetry intact', () => {
+test('schema v5 database upgrades additively to v8 with audit, notification outbox, worker telemetry, and equity snapshots intact', () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'nexora-migration-v5-v6-'));
   const legacyDirectory = join(temporaryDirectory, 'migrations-v5');
   const databasePath = join(temporaryDirectory, 'candidate.sqlite');
@@ -28,7 +28,7 @@ test('schema v5 database upgrades additively to v7 with audit, notification outb
 
     migrateDatabase(db, migrationsDirectory);
 
-    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 7);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 8);
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'telegram_notification_outbox'").get().name,
       'telegram_notification_outbox');
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'worker_cycle_metrics'").get().name,
