@@ -103,6 +103,13 @@ function nonNegative(value) {
   return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0;
 }
 
+function writeStateIfChanged(db, key, value, now) {
+  const current = readState(db, key, null);
+  if (JSON.stringify(current) === JSON.stringify(value)) return false;
+  writeState(db, key, value, now);
+  return true;
+}
+
 function round(value, places = 8) {
   return Number(Number(value).toFixed(places));
 }
@@ -254,11 +261,11 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
     const instrumentMetadataBySymbol = payload?.instrumentMetadataBySymbol ?? {};
     const paperCostsBySymbol = payload?.paperCostsBySymbol ?? {};
     for (const symbol of normalizedQuotes.map((item) => item.symbol)) {
-      if (instrumentMetadataBySymbol[symbol]) writeState(db, `instrumentMetadata:${symbol}`, instrumentMetadataBySymbol[symbol], receivedAt);
-      if (paperCostsBySymbol[symbol]) writeState(db, `paperCosts:${symbol}`, paperCostsBySymbol[symbol], receivedAt);
+      if (instrumentMetadataBySymbol[symbol]) writeStateIfChanged(db, `instrumentMetadata:${symbol}`, instrumentMetadataBySymbol[symbol], receivedAt);
+      if (paperCostsBySymbol[symbol]) writeStateIfChanged(db, `paperCosts:${symbol}`, paperCostsBySymbol[symbol], receivedAt);
     }
-    if (payload?.instrumentMetadata) writeState(db, 'instrumentMetadata', payload.instrumentMetadata, receivedAt);
-    if (payload?.paperCosts) writeState(db, 'paperCosts', payload.paperCosts, receivedAt);
+    if (payload?.instrumentMetadata) writeStateIfChanged(db, 'instrumentMetadata', payload.instrumentMetadata, receivedAt);
+    if (payload?.paperCosts) writeStateIfChanged(db, 'paperCosts', payload.paperCosts, receivedAt);
     for (const { quote, symbol, observedTime, fresh } of normalizedQuotes) {
       // The legacy snapshot schema names the fresh status BROKER. Keep the
       // actual source in `source` so MARKET_DATA remains distinguishable.
@@ -299,6 +306,7 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
         ?? {};
       for (const [timeframe, supplied] of Object.entries(candlesByTimeframe)) {
         if (!TIMEFRAMES.has(timeframe) || !Array.isArray(supplied)) { rejectedCandles += 1; continue; }
+        if (!supplied.length) continue;
         const stored = db.prepare(`
           SELECT MAX(closed_at) AS latest_closed_at,
             MAX(CASE WHEN quality = 'CONFLICT' THEN closed_at ELSE NULL END) AS latest_conflict_at
