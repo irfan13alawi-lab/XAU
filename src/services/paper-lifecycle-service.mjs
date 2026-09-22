@@ -571,13 +571,18 @@ export function reconcilePaperExecution(db, { quote = null, costs = null, paperM
     summary.reasons.push('PAPER_MODE_DISABLED');
   }
 
+  const positions = db.prepare(`SELECT * FROM positions WHERE status IN ('OPEN', 'PARTIAL') ORDER BY opened_at LIMIT ?`).all(limit);
+  // With no pending orders or open positions there is nothing to reconcile.
+  // This keeps the heartbeat cheap without weakening any fill/close gate when
+  // paper execution has active work to manage.
+  if (!pending.length && !positions.length) return summary;
+
   if (!quoteIsFreshMarketData(quote, now)) {
     summary.skipped += 1;
     summary.reasons.push('VERIFIED_FRESH_BROKER_QUOTE_REQUIRED');
     return summary;
   }
 
-  const positions = db.prepare(`SELECT * FROM positions WHERE status IN ('OPEN', 'PARTIAL') ORDER BY opened_at LIMIT ?`).all(limit);
   for (const position of positions) {
     const result = monitorPosition(db, position, quote, costs, now);
     if (result.updated) {
