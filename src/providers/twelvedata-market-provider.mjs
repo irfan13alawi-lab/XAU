@@ -194,11 +194,16 @@ export class TwelveDataMarketDataProvider {
       try {
         result[timeframe] = candlesFromResponse(await getJson(url, signal), symbol, timeframe, now);
       } catch (error) {
-        if (error?.code === 'MARKET_DATA_RATE_LIMITED') this.#marketDataRetryAt = Date.now() + 60_000;
-        throw error;
+        if (error?.code === 'MARKET_DATA_RATE_LIMITED') {
+          this.#marketDataRetryAt = Date.now() + 60_000;
+          break;
+        }
+        // Keep any timeframes that were already accepted. Paper execution
+        // still requires complete MTF data, but the dashboard can show a
+        // verified quote and partial candle coverage during provider limits.
       }
     }
-    this.#candleCache.set(symbol, { value: result, fetchedAt: Date.now() });
+    if (Object.keys(result).length > 0) this.#candleCache.set(symbol, { value: result, fetchedAt: Date.now() });
     return result;
   }
 
