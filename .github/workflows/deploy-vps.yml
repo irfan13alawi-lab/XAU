@@ -115,7 +115,7 @@ jobs:
             mv "$tmp_file" "$APP_PATH/.env"
           }
           upsert_env NEXORA_MARKET_SOURCE twelvedata
-          upsert_env NEXORA_SYMBOLS XAUUSD,EURUSD,GBPUSD,USDJPY
+          upsert_env NEXORA_SYMBOLS XAUUSD
           upsert_env NEXORA_PAPER_SPREAD_PRICE 0.20
           upsert_env PAPER_MODE true
           upsert_env LIVE_TRADING_ENABLED false
