@@ -274,7 +274,18 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
         ?? {};
       for (const [timeframe, supplied] of Object.entries(candlesByTimeframe)) {
         if (!TIMEFRAMES.has(timeframe) || !Array.isArray(supplied)) { rejectedCandles += 1; continue; }
-        const candles = [...supplied].slice(-MAX_CANDLES_PER_FRAME).sort((a, b) => Date.parse(a.closedAt ?? '') - Date.parse(b.closedAt ?? ''));
+        const stored = db.prepare(`
+          SELECT MAX(closed_at) AS latest_closed_at,
+            MAX(CASE WHEN quality = 'CONFLICT' THEN closed_at ELSE NULL END) AS latest_conflict_at
+          FROM candles WHERE symbol = ? AND timeframe = ?
+        `).get(symbol, timeframe);
+        const storedLatest = Date.parse(stored?.latest_closed_at ?? '');
+        const storedConflict = Date.parse(stored?.latest_conflict_at ?? '');
+        const boundary = Number.isFinite(storedConflict) ? storedConflict : storedLatest;
+        const candles = [...supplied]
+          .filter((candle) => !Number.isFinite(boundary) || Date.parse(candle?.closedAt ?? '') >= boundary)
+          .slice(-MAX_CANDLES_PER_FRAME)
+          .sort((a, b) => Date.parse(a.closedAt ?? '') - Date.parse(b.closedAt ?? ''));
         for (const candle of candles) {
           const closedAt = Date.parse(candle?.closedAt ?? '');
           if (!candleValid(candle) || String(candle.source ?? '').toUpperCase() !== source || closedAt > now.getTime()
