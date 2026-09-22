@@ -77,7 +77,7 @@ async function getJson(url, signal) {
 
 function quoteFromResponse(body, symbol, now) {
   const payload = body?.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : body;
-  const mid = number(payload?.rate ?? payload?.price ?? payload?.close);
+  const mid = number(payload?.rate ?? payload?.value ?? payload?.price ?? payload?.close);
   const observedAt = parseTimestamp(payload?.timestamp ?? payload?.datetime ?? payload?.last_quote_at) ?? now;
   const spread = configuredSpread();
   if (mid == null || mid <= 0 || spread == null) return null;
@@ -259,16 +259,20 @@ export class TwelveDataMarketDataProvider {
     }
     const unresolved = missing.filter((symbol) => !quotes[symbol]);
     for (const symbol of unresolved) {
-      try {
-        const singleUrl = new URL('https://api.twelvedata.com/currency_conversion');
-        singleUrl.search = new URLSearchParams({ symbol: providerSymbol(symbol), amount: '1', apikey: key, timezone: 'UTC' }).toString();
-        const singleBody = await getJson(singleUrl, signal);
-        const quote = quoteFromResponse(responseForSymbol(singleBody, symbol, 1), symbol, now);
-        if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
-        this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
-        quotes[symbol] = quote;
-      } catch (error) {
-        fallbackError = error;
+      for (const endpoint of ['currency_conversion', 'price', 'quote']) {
+        try {
+          const singleUrl = new URL(`https://api.twelvedata.com/${endpoint}`);
+          singleUrl.search = new URLSearchParams({ symbol: providerSymbol(symbol), amount: '1', apikey: key, timezone: 'UTC' }).toString();
+          const singleBody = await getJson(singleUrl, signal);
+          const quote = quoteFromResponse(responseForSymbol(singleBody, symbol, 1), symbol, now);
+          if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+          this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
+          quotes[symbol] = quote;
+          fallbackError = null;
+          break;
+        } catch (error) {
+          fallbackError = error;
+        }
       }
     }
     if (!quotes[PRIMARY_SYMBOL]) throw fallbackError ?? errorWithCode(configuredSpread() == null ? 'PAPER_SPREAD_NOT_CONFIGURED' : 'MARKET_DATA_QUOTE_INVALID');
