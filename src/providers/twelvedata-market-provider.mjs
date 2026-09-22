@@ -72,8 +72,9 @@ async function getJson(url, signal) {
 }
 
 function quoteFromResponse(body, symbol, now) {
-  const mid = number(body?.rate ?? body?.price ?? body?.close);
-  const observedAt = parseTimestamp(body?.timestamp ?? body?.datetime ?? body?.last_quote_at) ?? now;
+  const payload = body?.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : body;
+  const mid = number(payload?.rate ?? payload?.price ?? payload?.close);
+  const observedAt = parseTimestamp(payload?.timestamp ?? payload?.datetime ?? payload?.last_quote_at) ?? now;
   const spread = configuredSpread();
   if (mid == null || mid <= 0 || spread == null) return null;
   const half = spread / 2;
@@ -87,11 +88,29 @@ function quoteFromResponse(body, symbol, now) {
   };
 }
 
+function normalizedSymbol(value) {
+  return String(value ?? '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
+}
+
 function responseForSymbol(body, symbol, symbolCount) {
-  const key = providerSymbol(symbol);
-  const candidates = [body?.[key], body?.[symbol], body?.data?.[key], body?.data?.[symbol]];
-  for (const candidate of candidates) {
-    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) return candidate;
+  const wanted = normalizedSymbol(providerSymbol(symbol));
+  const containers = [body, body?.data, body?.results, body?.result];
+  for (const container of containers) {
+    if (!container || typeof container !== 'object') continue;
+    if (Array.isArray(container)) {
+      const match = container.find((item) => normalizedSymbol(item?.symbol ?? item?.meta?.symbol) === wanted);
+      if (match && typeof match === 'object') return match;
+      continue;
+    }
+    const directKeys = [providerSymbol(symbol), symbol, wanted];
+    for (const key of directKeys) {
+      const candidate = container[key];
+      if (candidate && typeof candidate === 'object') return candidate;
+    }
+    for (const [entryKey, entryValue] of Object.entries(container)) {
+      if (normalizedSymbol(entryKey) === wanted && entryValue && typeof entryValue === 'object') return entryValue;
+      if (entryValue && typeof entryValue === 'object' && normalizedSymbol(entryValue.symbol ?? entryValue.meta?.symbol) === wanted) return entryValue;
+    }
   }
   if (symbolCount === 1 && body && typeof body === 'object' && !Array.isArray(body)) return body;
   return null;
@@ -99,7 +118,8 @@ function responseForSymbol(body, symbol, symbolCount) {
 
 function candlesFromResponse(body, symbol, timeframe, now) {
   const definition = TIMEFRAMES[timeframe];
-  const rows = Array.isArray(body?.values) ? body.values : [];
+  const payload = body?.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : body;
+  const rows = Array.isArray(payload?.values) ? payload.values : [];
   const intervalMs = definition?.[1];
   if (!intervalMs) return [];
   return rows.map((row) => {
