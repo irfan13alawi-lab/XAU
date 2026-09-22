@@ -178,12 +178,34 @@ jobs:
           for attempt in $(seq 1 30); do
             if curl -fsS --max-time 3 http://127.0.0.1:18087/healthz | grep -q '"liveness":"ok"'; then
               echo "NEXORA_HEALTHY commit=$DEPLOY_SHA"
+              break
+            fi
+            sleep 2
+          done
+
+          if ! curl -fsS --max-time 3 http://127.0.0.1:18087/healthz | grep -q '"liveness":"ok"'; then
+            docker logs --tail 80 "$CONTAINER_NAME" || true
+            echo "NEXORA_HEALTH_CHECK_FAILED commit=$DEPLOY_SHA"
+            exit 1
+          fi
+
+          CONTROL_TOKEN="$(sed -n 's/^NEXORA_CONTROL_TOKEN=//p' "$APP_PATH/.env")"
+          test -n "$CONTROL_TOKEN"
+          for attempt in $(seq 1 60); do
+            if curl -fsS --max-time 3 http://127.0.0.1:18087/healthz | grep -q '"readiness":"ready"'; then
+              resume_response="$(curl -fsS --max-time 5 -X POST http://127.0.0.1:18087/api/actions/resume \
+                -H 'content-type: application/json' \
+                -H "authorization: Bearer $CONTROL_TOKEN" \
+                -H "idempotency-key: deploy-resume-$DEPLOY_SHA" \
+                -d '{}')"
+              printf '%s\n' "$resume_response" | grep -q '"entriesAllowed":true'
+              echo "NEXORA_PAPER_RESUMED commit=$DEPLOY_SHA"
               exit 0
             fi
             sleep 2
           done
 
           docker logs --tail 80 "$CONTAINER_NAME" || true
-          echo "NEXORA_HEALTH_CHECK_FAILED commit=$DEPLOY_SHA"
+          echo "NEXORA_READINESS_CHECK_FAILED commit=$DEPLOY_SHA"
           exit 1
           REMOTE
