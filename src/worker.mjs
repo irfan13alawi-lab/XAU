@@ -721,6 +721,10 @@ export class PaperWorker {
   start() {
     if (this.running) return;
     this.running = true;
+    // Provider priming is deliberately launched before the first tick so a
+    // cold network connection cannot inflate worker latency. Until the
+    // background feed publishes a valid quote, readHealth remains fail-closed.
+    this.provider?.start?.();
     void this.tick();
     this.#timer = setInterval(() => { void this.tick(); }, this.intervalMs);
     this.#timer.unref?.();

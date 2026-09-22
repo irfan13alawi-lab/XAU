@@ -500,7 +500,12 @@ export class TwelveDataMarketDataProvider {
     if (configuredSpread() == null) return { source: SOURCE, status: 'OFFLINE', checkedAt: now.toISOString(), reason: 'PAPER_SPREAD_NOT_CONFIGURED' };
     try {
       let quotes = this.#cachedQuotes(now);
-      if (!quotes[PRIMARY_SYMBOL]) quotes = await this.#readQuotes(now, signal);
+      // Once the background feed owns refreshes, never make a worker health
+      // tick wait on a cold or expired provider request. The worker will stay
+      // fail-closed until the background refresh publishes a fresh quote.
+      if (!quotes[PRIMARY_SYMBOL] && !this.#backgroundTimer && !this.#backgroundRefreshInFlight && !this.#backgroundPrimingScheduled) {
+        quotes = await this.#readQuotes(now, signal);
+      }
       const quote = quotes[PRIMARY_SYMBOL];
       if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
       this.#startBackgroundFeed();
@@ -523,7 +528,7 @@ export class TwelveDataMarketDataProvider {
       throw error;
     }
     const hasCachedCandles = [...this.#candleCache.values()].some((timeframes) => timeframes.size > 0);
-    if (!hasCachedCandles && !this.#backgroundRefreshInFlight && !this.#backgroundPrimingScheduled) {
+    if (!hasCachedCandles && !this.#backgroundTimer && !this.#backgroundRefreshInFlight && !this.#backgroundPrimingScheduled) {
       const timeframe = TIMEFRAME_NAMES[this.#candleCursor % TIMEFRAME_NAMES.length];
       this.#candleCursor += 1;
       this.#lastCandleCycleAt = now.getTime();
@@ -585,6 +590,10 @@ export class TwelveDataMarketDataProvider {
     if (this.#backgroundTimer) clearInterval(this.#backgroundTimer);
     this.#backgroundTimer = null;
     this.#backgroundPrimingScheduled = false;
+  }
+
+  start() {
+    this.#startBackgroundFeed();
   }
 }
 

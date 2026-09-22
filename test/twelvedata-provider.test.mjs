@@ -157,6 +157,45 @@ test('Twelve Data adapter refreshes cached candle timeframes instead of freezing
   }
 });
 
+test('provider priming stays off the worker health tick while the first quote is pending', async () => {
+  const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
+  const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
+  const previousFetch = globalThis.fetch;
+  process.env.NEXORA_TWELVEDATA_API_KEY = 'test-key-not-a-credential';
+  process.env.NEXORA_PAPER_SPREAD_PRICE = '0.20';
+  const now = new Date('2026-09-22T00:00:00.000Z');
+  let releaseFetch;
+  const fetchGate = new Promise((resolve) => { releaseFetch = resolve; });
+  globalThis.fetch = async (input) => {
+    await fetchGate;
+    const url = new URL(input);
+    if (url.pathname.endsWith('/currency_conversion')) {
+      return new Response(JSON.stringify({ rate: '2030.50', timestamp: Math.floor(now.getTime() / 1000) }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ values: candleRows(now, 15, 120) }), { status: 200 });
+  };
+  try {
+    const { TwelveDataMarketDataProvider } = await import('../src/providers/twelvedata-market-provider.mjs');
+    const provider = new TwelveDataMarketDataProvider({ symbols: ['XAUUSD'] });
+    provider.start();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const health = await Promise.race([
+      provider.readHealth(now),
+      new Promise((resolve) => setTimeout(() => resolve('TIMEOUT'), 100)),
+    ]);
+    assert.notEqual(health, 'TIMEOUT');
+    assert.equal(health.status, 'OFFLINE');
+    provider.stop();
+  } finally {
+    releaseFetch();
+    if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
+    else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
+    if (previousSpread === undefined) delete process.env.NEXORA_PAPER_SPREAD_PRICE;
+    else process.env.NEXORA_PAPER_SPREAD_PRICE = previousSpread;
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('Twelve Data adapter accepts array and nested-data batch response shapes', async () => {
   const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
   const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
