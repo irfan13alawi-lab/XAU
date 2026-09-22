@@ -207,7 +207,9 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const { quote, symbol, observedTime, fresh } of normalizedQuotes) {
-      const quoteStatus = fresh ? source : 'STALE';
+      // The legacy snapshot schema names the fresh status BROKER. Keep the
+      // actual source in `source` so MARKET_DATA remains distinguishable.
+      const quoteStatus = fresh ? 'BROKER' : 'STALE';
       const marketOverview = payload?.marketOverviewBySymbol?.[symbol]
         ?? (symbol === 'XAUUSD' ? payload?.marketOverview : null)
         ?? null;

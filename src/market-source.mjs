@@ -11,6 +11,7 @@ export function isAcceptedMarketSource(value) {
 
 export function isFreshMarketSnapshot(value) {
   const source = String(value?.source ?? '').trim().toUpperCase();
-  return isAcceptedMarketSource(source) && value?.status === source;
+  return isAcceptedMarketSource(source)
+    && (value?.status === source || (source === 'MARKET_DATA' && value?.status === 'BROKER'));
 }
 

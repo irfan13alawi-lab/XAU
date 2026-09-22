@@ -4,6 +4,9 @@ import { config as baseConfig } from '../config.mjs';
 import { managePaperPosition, PaperBrokerAdapter } from '../domain/paper-execution.mjs';
 import { evaluateRiskGuard } from '../domain/risk.mjs';
 import { loadFreshRiskMetrics } from './risk-state-service.mjs';
+import { isAcceptedMarketSource } from '../market-source.mjs';
+
+const PAPER_EXECUTION_QUOTE_MAX_AGE_MS = 30_000;
 
 const n = (value, fallback = 0) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) ? Number(value) : fallback;
 const money = (value) => Number(Number(value).toFixed(2));
@@ -41,13 +44,15 @@ function correlationForPosition(db, position, snapshot = json(position.snapshot_
   return order ? correlationForOrder(db, order) : `legacy-position-${String(position.id).replace(/[^A-Za-z0-9._:-]/g, '_')}`.slice(0, 128);
 }
 
-function quoteIsFreshBroker(quote, now) {
+function quoteIsFreshMarketData(quote, now) {
   const observedAt = Date.parse(quote?.observedAt ?? '');
   const receivedAt = Date.parse(quote?.receivedAt ?? '');
-  return quote?.source === 'BROKER' && quote?.dataFreshness === 'FRESH'
+  return isAcceptedMarketSource(quote?.source) && quote?.dataFreshness === 'FRESH'
     && Number.isFinite(observedAt) && Number.isFinite(receivedAt)
-    && now.getTime() >= observedAt && now.getTime() - observedAt <= 30_000
-    && now.getTime() >= receivedAt && now.getTime() - receivedAt <= 30_000
+    // A dashboard may retain a provider quote for bounded observation, but a
+    // paper fill still requires a quote received within the execution window.
+    && now.getTime() >= observedAt && now.getTime() - observedAt <= PAPER_EXECUTION_QUOTE_MAX_AGE_MS
+    && now.getTime() >= receivedAt && now.getTime() - receivedAt <= PAPER_EXECUTION_QUOTE_MAX_AGE_MS
     && n(quote.bid, NaN) > 0 && n(quote.ask, NaN) >= n(quote.bid, Infinity);
 }
 
@@ -365,7 +370,7 @@ export function closePaperPosition(db, { positionId, quote, costs = null, now = 
   if (typeof positionId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(positionId)) {
     throw new TypeError('Paper position ID is invalid.');
   }
-  if (!quoteIsFreshBroker(quote, now)) return { updated: false, reason: 'VERIFIED_FRESH_BROKER_QUOTE_REQUIRED' };
+  if (!quoteIsFreshMarketData(quote, now)) return { updated: false, reason: 'VERIFIED_FRESH_BROKER_QUOTE_REQUIRED' };
   const position = db.prepare(`SELECT id FROM positions WHERE id = ? AND status IN ('OPEN', 'PARTIAL')`).get(positionId);
   if (!position) return { updated: false, reason: 'POSITION_NOT_OPEN' };
   return monitorPosition(db, position, quote, costs, now, { manualClose: true, withinTransaction, httpRequestId });
@@ -566,7 +571,7 @@ export function reconcilePaperExecution(db, { quote = null, costs = null, paperM
     summary.reasons.push('PAPER_MODE_DISABLED');
   }
 
-  if (!quoteIsFreshBroker(quote, now)) {
+  if (!quoteIsFreshMarketData(quote, now)) {
     summary.skipped += 1;
     summary.reasons.push('VERIFIED_FRESH_BROKER_QUOTE_REQUIRED');
     return summary;
