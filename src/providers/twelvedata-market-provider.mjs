@@ -9,9 +9,10 @@ const TIMEFRAMES = Object.freeze({
   H1: ['1h', 60 * 60_000],
   H4: ['4h', 4 * 60 * 60_000],
 });
-// The worker checks health frequently; reuse the provider's latest quote for a
-// minute so the Twelve Data credit budget is not consumed by duplicate reads.
-const QUOTE_CACHE_MS = 60_000;
+// The worker checks health every 15 seconds. The background feed refreshes
+// quotes every two minutes, so worker ticks must reuse the cache instead of
+// turning provider I/O into recurring latency spikes.
+const QUOTE_CACHE_MS = 5 * 60_000;
 const CANDLE_CACHE_MS = 5 * 60_000;
 const CANDLE_COUNT = 300;
 const DAY_MS = 24 * 60 * 60_000;
