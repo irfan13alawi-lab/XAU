@@ -58,7 +58,12 @@ async function getJson(url, signal) {
   }
   let body;
   try { body = await response.json(); } catch { throw errorWithCode('MARKET_DATA_INVALID_RESPONSE'); }
-  if (!response.ok || body?.status === 'error' || body?.code) throw errorWithCode('MARKET_DATA_PROVIDER_ERROR');
+  if (!response.ok || body?.status === 'error' || body?.code) {
+    const providerCode = Number(body?.code);
+    if (providerCode === 401 || providerCode === 403) throw errorWithCode('MARKET_DATA_AUTH_ERROR');
+    if (providerCode === 429) throw errorWithCode('MARKET_DATA_RATE_LIMITED');
+    throw errorWithCode('MARKET_DATA_PROVIDER_ERROR');
+  }
   return body;
 }
 
