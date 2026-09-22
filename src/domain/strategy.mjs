@@ -1,4 +1,5 @@
 import { calculateIndicators } from './indicators.mjs';
+import { isAcceptedMarketSource } from '../market-source.mjs';
 
 export const TIMEFRAMES = Object.freeze(['H4', 'H1', 'M30', 'M15']);
 const TIMEFRAME_MS = Object.freeze({ M15: 15 * 60_000, M30: 30 * 60_000, H1: 60 * 60_000, H4: 4 * 60 * 60_000 });
@@ -142,7 +143,7 @@ export function analyzeTimeframe({ candles, timeframe, source, now = new Date(),
     }
   }
   const sources = new Set((candles ?? []).map((candle) => String(candle.source ?? source ?? '').toUpperCase()));
-  if (String(source ?? '').toUpperCase() !== 'BROKER' || [...sources].some((item) => item !== 'BROKER')) rejectionReasons.push('MARKET_SOURCE_NOT_VERIFIED_BROKER');
+  if (!isAcceptedMarketSource(source) || [...sources].some((item) => !isAcceptedMarketSource(item))) rejectionReasons.push('MARKET_SOURCE_NOT_VERIFIED_BROKER');
 
   if (rejectionReasons.length) {
     return { timeframe, direction: 'UNAVAILABLE', strength: null, votes: [], indicators: null, fresh: false, candleClosedAt: candles?.at(-1)?.closedAt ?? candles?.at(-1)?.closed_at ?? null, rejectionReasons: [...new Set(rejectionReasons)] };
@@ -293,7 +294,7 @@ export function evaluateMtfGate({ analyses, quote, news, risk, plan, config }) {
   if (confluencePct < Number(config?.minConfluencePct ?? 60)) rejectionReasons.push('CONFLUENCE_BELOW_MINIMUM');
   if (score < Number(config?.minSignalScore ?? 70)) rejectionReasons.push('SCORE_BELOW_MINIMUM');
 
-  if (!quote || String(quote.source ?? '').toUpperCase() !== 'BROKER') rejectionReasons.push('BROKER_OFFLINE');
+  if (!quote || !isAcceptedMarketSource(quote.source)) rejectionReasons.push('BROKER_OFFLINE');
   if (quote && quote.dataFreshness !== 'FRESH') rejectionReasons.push('MARKET_DATA_STALE');
   if (!quote || !finite(quote.bid) || !finite(quote.ask) || Number(quote.ask) < Number(quote.bid)) rejectionReasons.push('QUOTE_INVALID');
   if (!finite(config?.maxSpreadPrice) || Number(config.maxSpreadPrice) <= 0) rejectionReasons.push('SPREAD_LIMIT_UNCONFIGURED');

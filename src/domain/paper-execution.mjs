@@ -1,3 +1,5 @@
+import { isAcceptedMarketSource } from '../market-source.mjs';
+
 const number = (value) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
 const positive = (value) => number(value) && Number(value) > 0;
 
@@ -27,7 +29,7 @@ export function matchPendingOrder(order, quote, now = new Date(), costs) {
   const expiresAt = Date.parse(order?.expiresAt ?? order?.expires_at ?? '');
   if (!Number.isFinite(expiresAt)) return { status: 'REJECTED', reason: 'ORDER_EXPIRY_INVALID' };
   if (now.getTime() >= expiresAt) return { status: 'EXPIRED', reason: 'PENDING_EXPIRED' };
-  if (!quote || quote.source !== 'BROKER' || quote.dataFreshness !== 'FRESH' || !positive(quote.bid) || !positive(quote.ask) || Number(quote.ask) < Number(quote.bid)) {
+  if (!quote || !isAcceptedMarketSource(quote.source) || quote.dataFreshness !== 'FRESH' || !positive(quote.bid) || !positive(quote.ask) || Number(quote.ask) < Number(quote.bid)) {
     return { status: 'HELD', reason: 'VERIFIED_FRESH_BROKER_QUOTE_REQUIRED' };
   }
   if (!['BUY', 'SELL'].includes(order.side) || !['LIMIT', 'STOP'].includes(order.orderType ?? order.order_type) || !positive(order.entryPrice ?? order.entry_price) || !positive(order.quantityLots ?? order.quantity_lots)) {
@@ -104,7 +106,7 @@ function targetLimitExitPrice(position, referencePrice, targetPrice, costs) {
 
 export function managePaperPosition(position, quote, now = new Date(), costs, { closeRequested = false } = {}) {
   validateCosts(costs);
-  if (!quote || quote.source !== 'BROKER' || quote.dataFreshness !== 'FRESH' || !positive(quote.bid) || !positive(quote.ask) || Number(quote.ask) < Number(quote.bid)) {
+  if (!quote || !isAcceptedMarketSource(quote.source) || quote.dataFreshness !== 'FRESH' || !positive(quote.bid) || !positive(quote.ask) || Number(quote.ask) < Number(quote.bid)) {
     return { status: position.status, events: [], reason: 'VERIFIED_FRESH_BROKER_QUOTE_REQUIRED' };
   }
   if (!['LONG', 'SHORT'].includes(position.side) || !positive(position.quantityOpenLots ?? position.quantity_open_lots)
