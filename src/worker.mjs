@@ -512,7 +512,7 @@ export class PaperWorker {
     } catch (error) {
       providerDurationMs ??= elapsedMilliseconds(startedAt, this.monotonicNow());
       const previousFetchedAt = Date.parse(previous.fetchedAt ?? '');
-      const cachedCalendarFresh = previous.status === 'HEALTHY'
+      const cachedCalendarFresh = previous.source && previous.source !== 'none'
         && Number.isFinite(previousFetchedAt)
         && now.getTime() >= previousFetchedAt
         && now.getTime() - previousFetchedAt <= 30 * 60_000;
