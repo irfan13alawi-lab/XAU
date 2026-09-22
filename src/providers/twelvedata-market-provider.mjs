@@ -160,6 +160,7 @@ function marketOverviewFromCandles(symbol, quote, candlesByTimeframe, now) {
 export class TwelveDataMarketDataProvider {
   #quoteCache = new Map();
   #candleCache = new Map();
+  #marketDataRetryAt = 0;
 
   constructor({ symbols = config.symbols } = {}) {
     const normalized = [...new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()))];
@@ -190,7 +191,12 @@ export class TwelveDataMarketDataProvider {
     for (const [timeframe, [interval]] of Object.entries(TIMEFRAMES)) {
       const url = new URL('https://api.twelvedata.com/time_series');
       url.search = new URLSearchParams({ symbol: providerSymbol(symbol), interval, outputsize: String(CANDLE_COUNT), timezone: 'UTC', apikey: key }).toString();
-      result[timeframe] = candlesFromResponse(await getJson(url, signal), symbol, timeframe, now);
+      try {
+        result[timeframe] = candlesFromResponse(await getJson(url, signal), symbol, timeframe, now);
+      } catch (error) {
+        if (error?.code === 'MARKET_DATA_RATE_LIMITED') this.#marketDataRetryAt = Date.now() + 60_000;
+        throw error;
+      }
     }
     this.#candleCache.set(symbol, { value: result, fetchedAt: Date.now() });
     return result;
@@ -209,6 +215,7 @@ export class TwelveDataMarketDataProvider {
   }
 
   async readMarketData(now = new Date(), { signal } = {}) {
+    if (Date.now() < this.#marketDataRetryAt) throw errorWithCode('MARKET_DATA_RATE_LIMITED');
     const quotesBySymbol = {};
     const candlesBySymbol = {};
     const marketOverviewBySymbol = {};
