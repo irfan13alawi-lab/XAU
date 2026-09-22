@@ -745,7 +745,9 @@
       pauseButton.classList.toggle('paused', Boolean(trading.entryPaused));
       const readinessReasons = [];
       if (!data.worker?.running) readinessReasons.push('worker not ready');
-      if (!broker.connected) readinessReasons.push('broker offline');
+      const paperMarketFeedConnected = data.market?.dataFreshness === 'FRESH'
+        && ['BROKER', 'MARKET_DATA'].includes(data.market?.source);
+      if (!broker.connected && !paperMarketFeedConnected) readinessReasons.push('broker offline');
       if (data.market?.dataFreshness !== 'FRESH') readinessReasons.push('fresh market quote unavailable');
       if (data.market?.candleFreshness !== 'FRESH') readinessReasons.push('fresh M15 candle unavailable');
       if (data.news?.status !== 'HEALTHY') readinessReasons.push('news calendar unavailable or stale');

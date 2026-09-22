@@ -71,9 +71,9 @@ test('dashboard enables paper entries only when every readiness gate and worker 
 
     telemetryDb.prepare('DELETE FROM broker_health').run();
     snapshot = dashboardSnapshot(telemetryDb, now);
-    assert.equal(snapshot.trading.state, 'BROKER OFFLINE');
+    assert.equal(snapshot.trading.state, 'MONITORING ONLY');
     assert.deepEqual(snapshot.trading.statusFlags, [
-      'BROKER OFFLINE', 'PAPER OFF', 'MONITORING ONLY', 'LIVE DISABLED',
+      'MONITORING ONLY', 'PAPER OFF', 'LIVE DISABLED',
     ]);
   } finally {
     telemetryDb.close();

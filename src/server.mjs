@@ -451,6 +451,7 @@ export function dashboardSnapshot(db, now = new Date()) {
     SELECT closed_at, source, quality FROM candles WHERE symbol = 'XAUUSD' AND timeframe = 'M15' ORDER BY closed_at DESC LIMIT 1
   `).get() ?? null;
   const candleFreshness = candleDataFreshness(lastClosedCandle, 'M15', now);
+  const paperMarketFeedConnected = marketFresh && isAcceptedMarketSource(latestMarket?.source);
   const news = readState(db, 'newsProvider', { status: 'OFFLINE', source: 'none', fetchedAt: null, reason: 'No news-calendar provider is configured.' });
   const newsFetchedAt = news.fetchedAt ? Date.parse(news.fetchedAt) : NaN;
   const newsFresh = news.status === 'HEALTHY' && Number.isFinite(newsFetchedAt)
@@ -469,14 +470,14 @@ export function dashboardSnapshot(db, now = new Date()) {
   const brokerOnline = health.status === 'HEALTHY';
   const entryPaused = readState(db, 'entryPaused', true);
   const paperMode = readState(db, 'paperMode', config.paperMode);
-  const botState = !brokerOnline ? 'BROKER OFFLINE'
+  const botState = !brokerOnline && !paperMarketFeedConnected ? 'BROKER OFFLINE'
     : !marketFresh ? latestMarket ? 'DATA STALE' : 'PAPER CHECKING'
       : candleFreshness !== 'FRESH' ? 'CANDLE DATA BLOCKED'
         : !newsFresh ? 'NEWS UNAVAILABLE'
           : !paperMode ? 'MONITORING ONLY'
           : entryPaused || riskState.freshness !== 'FRESH' || !riskGuard.allowed ? 'ENTRY PAUSED'
             : !workerReady ? 'PAPER CHECKING' : 'PAPER ON';
-  const stateReason = !brokerOnline ? reason
+  const stateReason = !brokerOnline && !paperMarketFeedConnected ? reason
     : !marketFresh ? 'Verified fresh broker quote is unavailable.'
       : candleFreshness !== 'FRESH' ? 'Verified closed M15 candle data is unavailable or stale; entries fail closed.'
         : !newsFresh ? news.reason ?? 'News calendar is unavailable or stale; entries fail closed.'
