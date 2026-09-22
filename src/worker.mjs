@@ -133,7 +133,7 @@ function persistPaperRiskState(db, now = new Date()) {
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
   const realizedToday = Number(db.prepare(`
     SELECT COALESCE(SUM(CAST(net_pnl AS REAL)), 0) AS total
-    FROM trades WHERE closed_at >= ? AND closed_at <= ?
+    FROM trades WHERE accounting_status = 'VALID' AND closed_at >= ? AND closed_at <= ?
   `).get(dayStart, now.toISOString())?.total ?? 0);
   const riskUnit = Number(snapshot.equity) * Number(config.risk.riskPerTradePct) / 100;
   const dailyLossR = Number.isFinite(realizedToday) && riskUnit > 0
@@ -658,6 +658,7 @@ export class PaperWorker {
           costs: executionCosts(this.db, symbol),
           paperMode: readState(this.db, 'paperMode', true) === true,
           now,
+          symbol,
         });
         for (const field of ['expired', 'cancelled', 'filled', 'monitored', 'closed', 'skipped']) execution[field] += Number(result[field] ?? 0);
         for (const reason of result.reasons ?? []) if (!execution.reasons.includes(reason)) execution.reasons.push(reason);

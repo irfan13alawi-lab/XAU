@@ -43,7 +43,7 @@ export function capturePaperEquitySnapshot(db, now = new Date(), { force = false
   const latestAt = Date.parse(latest?.observed_at ?? '');
   if (!force && Number.isFinite(latestAt) && now.getTime() - latestAt < SNAPSHOT_INTERVAL_MS) return latestPaperEquitySnapshot(db);
 
-  const realizedPnl = numeric(db.prepare('SELECT COALESCE(SUM(CAST(net_pnl AS REAL)), 0) AS total FROM trades').get()?.total);
+  const realizedPnl = numeric(db.prepare("SELECT COALESCE(SUM(CAST(net_pnl AS REAL)), 0) AS total FROM trades WHERE accounting_status = 'VALID'").get()?.total);
   const unrealizedPnl = numeric(db.prepare("SELECT COALESCE(SUM(CAST(unrealized_pnl AS REAL)), 0) AS total FROM positions WHERE status IN ('OPEN', 'PARTIAL')").get()?.total);
   const balance = config.paperStartingEquity + realizedPnl;
   const equity = balance + unrealizedPnl;

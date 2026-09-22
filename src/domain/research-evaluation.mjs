@@ -213,7 +213,7 @@ function convertedTickValue(instrument, currency) {
 }
 
 function refreshRiskMetrics(db, { now, account, instrument, costs, maxSpreadPrice, peakEquity, quote }) {
-  const trades = db.prepare('SELECT pnl_r, net_pnl, closed_at FROM trades ORDER BY closed_at, rowid').all();
+  const trades = db.prepare("SELECT pnl_r, net_pnl, closed_at FROM trades WHERE accounting_status = 'VALID' ORDER BY closed_at, rowid").all();
   const closedNet = trades.reduce((sum, trade) => sum + Number(trade.net_pnl), 0);
   const openPositions = db.prepare("SELECT * FROM positions WHERE status IN ('OPEN', 'PARTIAL')").all();
   const markValue = openPositions.reduce((sum, position) => {
@@ -437,7 +437,7 @@ async function evaluateFold(dataset, validated, fold) {
         attemptedScans += 1;
       }
     }
-    const trades = db.prepare('SELECT * FROM trades WHERE closed_at >= ? AND closed_at <= ? ORDER BY closed_at, rowid')
+    const trades = db.prepare("SELECT * FROM trades WHERE accounting_status = 'VALID' AND closed_at >= ? AND closed_at <= ? ORDER BY closed_at, rowid")
       .all(fold.testStartAt, fold.testEndAt);
     const statisticRows = trades.map((trade) => {
       const snapshot = JSON.parse(trade.snapshot_json ?? '{}');

@@ -616,7 +616,7 @@ function aggregateStats(db, now) {
   const rows = db.prepare(`
     SELECT t.*,
       EXISTS (SELECT 1 FROM position_events e WHERE e.position_id = t.position_id AND e.event_type = 'HIT_TP1') AS tp1_hit
-    FROM trades t ORDER BY t.closed_at, t.id
+    FROM trades t WHERE t.accounting_status = 'VALID' ORDER BY t.closed_at, t.id
   `).all().map((trade) => {
     const snapshot = parseJson(trade.snapshot_json, {}) ?? {};
     const classification = snapshot.classification ?? {};

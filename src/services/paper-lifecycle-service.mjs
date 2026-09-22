@@ -558,20 +558,32 @@ function fillOrder(db, initial, quote, fallbackCosts, now) {
   }
 }
 
-export function reconcilePaperExecution(db, { quote = null, costs = null, paperMode = true, now = new Date(), limit = 100 } = {}) {
+export function reconcilePaperExecution(db, { quote = null, costs = null, paperMode = true, now = new Date(), limit = 100, symbol = null } = {}) {
   const summary = { expired: 0, cancelled: 0, filled: 0, monitored: 0, closed: 0, skipped: 0, reasons: [] };
-  const pending = db.prepare(`SELECT * FROM orders WHERE status IN ('PENDING', 'PARTIAL') ORDER BY created_at LIMIT ?`).all(limit);
+  const scopedSymbol = symbol == null ? null : String(symbol).trim().toUpperCase();
+  if (scopedSymbol && quote?.symbol && String(quote.symbol).trim().toUpperCase() !== scopedSymbol) {
+    summary.skipped = 1;
+    summary.reasons.push('MARKET_DATA_SYMBOL_MISMATCH');
+    return summary;
+  }
+  const pending = scopedSymbol
+    ? db.prepare(`SELECT * FROM orders WHERE symbol = ? AND status IN ('PENDING', 'PARTIAL') ORDER BY created_at LIMIT ?`).all(scopedSymbol, limit)
+    : db.prepare(`SELECT * FROM orders WHERE status IN ('PENDING', 'PARTIAL') ORDER BY created_at LIMIT ?`).all(limit);
   for (const order of pending) {
     if (Date.parse(order.expires_at) <= now.getTime() && expireOrder(db, order, now)) summary.expired += 1;
   }
 
   if (!paperMode) {
-    const cancellable = db.prepare("SELECT * FROM orders WHERE status IN ('PENDING', 'PARTIAL') ORDER BY created_at LIMIT ?").all(limit);
+    const cancellable = scopedSymbol
+      ? db.prepare("SELECT * FROM orders WHERE symbol = ? AND status IN ('PENDING', 'PARTIAL') ORDER BY created_at LIMIT ?").all(scopedSymbol, limit)
+      : db.prepare("SELECT * FROM orders WHERE status IN ('PENDING', 'PARTIAL') ORDER BY created_at LIMIT ?").all(limit);
     for (const order of cancellable) if (cancelOrderForPaperOff(db, order, now)) summary.cancelled += 1;
     summary.reasons.push('PAPER_MODE_DISABLED');
   }
 
-  const positions = db.prepare(`SELECT * FROM positions WHERE status IN ('OPEN', 'PARTIAL') ORDER BY opened_at LIMIT ?`).all(limit);
+  const positions = scopedSymbol
+    ? db.prepare(`SELECT * FROM positions WHERE symbol = ? AND status IN ('OPEN', 'PARTIAL') ORDER BY opened_at LIMIT ?`).all(scopedSymbol, limit)
+    : db.prepare(`SELECT * FROM positions WHERE status IN ('OPEN', 'PARTIAL') ORDER BY opened_at LIMIT ?`).all(limit);
   // With no pending orders or open positions there is nothing to reconcile.
   // This keeps the heartbeat cheap without weakening any fill/close gate when
   // paper execution has active work to manage.
@@ -596,7 +608,9 @@ export function reconcilePaperExecution(db, { quote = null, costs = null, paperM
 
   if (!paperMode) return summary;
 
-  const currentPending = db.prepare(`SELECT * FROM orders WHERE status IN ('PENDING', 'PARTIAL') ORDER BY created_at LIMIT ?`).all(limit);
+  const currentPending = scopedSymbol
+    ? db.prepare(`SELECT * FROM orders WHERE symbol = ? AND status IN ('PENDING', 'PARTIAL') ORDER BY created_at LIMIT ?`).all(scopedSymbol, limit)
+    : db.prepare(`SELECT * FROM orders WHERE status IN ('PENDING', 'PARTIAL') ORDER BY created_at LIMIT ?`).all(limit);
   for (const order of currentPending) {
     const result = fillOrder(db, order, quote, costs, now);
     if (result.updated && (result.status === 'FILLED' || result.status === 'PARTIAL')) summary.filled += 1;

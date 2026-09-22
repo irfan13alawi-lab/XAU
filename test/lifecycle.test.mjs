@@ -219,6 +219,43 @@ test('short paper lifecycle uses bid to enter and ask to mark, protect, and clos
   }
 });
 
+test('symbol-scoped reconciliation never fills an order with another symbol quote', () => {
+  const db = fixtureDatabase();
+  const orderSnapshot = JSON.parse(db.prepare('SELECT snapshot_json FROM orders WHERE id = ?').get('order-0001').snapshot_json);
+  const secondSnapshot = JSON.stringify({ ...orderSnapshot, market: { ...orderSnapshot.market, quote: { bid: 2000, ask: 2000.2 } } });
+  db.prepare('UPDATE orders SET symbol = \'EURUSD\' WHERE id = ?').run('order-0001');
+  db.prepare(`
+    INSERT INTO signals (id, scan_id, logical_setup_key, direction, status, entry_price, stop_price,
+      take_profit_1, take_profit_2, score, snapshot_json, created_at)
+    VALUES ('signal-0002', 'scan-0001', 'setup-logical-0002', 'LONG', 'PENDING', '2001', '1998', '2005', '2008', 80, '{}', '2026-09-21T12:00:00.000Z')
+  `).run();
+  db.prepare(`
+    INSERT INTO orders (id, idempotency_key, signal_id, symbol, side, order_type, status, quantity_lots,
+      entry_price, stop_price, take_profit_1, take_profit_2, expires_at, created_at, updated_at, snapshot_json,
+      remaining_quantity_lots)
+    VALUES ('order-0002', 'order-logical-0002', 'signal-0002', 'GBPUSD', 'BUY', 'LIMIT', 'PENDING', '0.2',
+      '2001', '1998', '2005', '2008', '2026-09-21T14:00:00.000Z', '2026-09-21T12:00:00.000Z',
+      '2026-09-21T12:00:00.000Z', ?, '0.2')
+  `).run(secondSnapshot);
+  const fillAt = new Date('2026-09-21T12:00:01.000Z');
+  try {
+    const eur = reconcilePaperExecution(db, {
+      symbol: 'EURUSD', quote: brokerQuote(fillAt, 2000.8, 2000.9), costs, now: fillAt,
+    });
+    assert.equal(eur.filled, 1);
+    assert.equal(db.prepare('SELECT status FROM orders WHERE id = ?').get('order-0002').status, 'PENDING');
+    assert.equal(JSON.parse(db.prepare('SELECT snapshot_json FROM positions WHERE order_id = ?').get('order-0001').snapshot_json).lastFill.quote.bid, 2000.8);
+
+    const gbp = reconcilePaperExecution(db, {
+      symbol: 'GBPUSD', quote: brokerQuote(new Date(fillAt.getTime() + 1000), 2000.8, 2000.9), costs, now: new Date(fillAt.getTime() + 1000),
+    });
+    assert.equal(gbp.filled, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM positions WHERE status = \'OPEN\'').get().n, 2);
+  } finally {
+    db.close();
+  }
+});
+
 test('operator manual close requires a fresh broker quote and atomically journals a paper exit', () => {
   const db = fixtureDatabase();
   const t0 = new Date('2026-09-21T12:00:00.000Z');
