@@ -25,9 +25,9 @@ function localBuildId() {
   });
   const hash = createHash('sha256');
   for (const path of files) {
-    hash.update(relative(PROJECT_ROOT, path).split(sep).join('/')).update('\0').update(readFileSync(path)).update('\0');
+    hash.update(relative(PROJECT_ROOT, path).split(sep).join('/')).update(String.fromCharCode(0)).update(readFileSync(path)).update(String.fromCharCode(0));
   }
-  return `LOCAL-${hash.digest('hex').slice(0, 12)}`;
+  return 'LOCAL-' + hash.digest('hex').slice(0, 12);
 }
 
 const liveFlag = (process.env.LIVE_TRADING_ENABLED ?? 'false').trim().toLowerCase();
@@ -104,7 +104,7 @@ export function fingerprintConfiguration(configuration, prefix = 'nexora-paper')
     throw new TypeError('A configuration manifest is required to calculate its version.');
   }
   const digest = createHash('sha256').update(JSON.stringify(configuration)).digest('hex').slice(0, 12);
-  return `${prefix}-${digest}`;
+  return prefix + '-' + digest;
 }
 
 const strategyProfileId = 'mtf-paper-v1';
@@ -151,6 +151,7 @@ export const config = Object.freeze({
   liveTradingEnabled: false,
   brokerName: safeProviderLabel(process.env.NEXORA_BROKER ?? 'none'),
   marketSource: safeProviderLabel(process.env.NEXORA_MARKET_SOURCE ?? 'none'),
+  marketProvider: safeProviderLabel(process.env.NEXORA_MARKET_SOURCE ?? 'none').toLowerCase(),
   operatorToken: operatorToken || null,
   telegram: Object.freeze({
     enabled: telegramEnabled,
