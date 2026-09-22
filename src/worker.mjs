@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { appendAudit, readState, writeState } from './database.mjs';
+import { config } from './config.mjs';
 import { executePaperScan } from './services/paper-scan-service.mjs';
 import { reconcilePaperExecution } from './services/paper-lifecycle-service.mjs';
-import { capturePaperEquitySnapshot } from './services/paper-equity-service.mjs';
+import { capturePaperEquitySnapshot, latestPaperEquitySnapshot } from './services/paper-equity-service.mjs';
 import { isAcceptedMarketSource, isFreshMarketSnapshot, MARKET_QUOTE_MAX_AGE_MS } from './market-source.mjs';
 
 const TIMEFRAMES = new Set(['M15', 'M30', 'H1', 'H4']);
@@ -96,6 +97,45 @@ function positive(value) {
 
 function nonNegative(value) {
   return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0;
+}
+
+function round(value, places = 8) {
+  return Number(Number(value).toFixed(places));
+}
+
+function persistPaperRiskState(db, now = new Date()) {
+  if (config.paperStartingEquity == null) return null;
+  const snapshot = latestPaperEquitySnapshot(db);
+  if (!snapshot || !positive(snapshot.equity) || !/^[A-Z]{3,8}$/.test(String(snapshot.currency ?? ''))) {
+    writeState(db, 'riskMetrics', {
+      equity: null,
+      currency: null,
+      dailyLossR: null,
+      drawdownPct: null,
+      maxSpreadPrice: config.risk.maxSpreadPrice,
+      source: 'PAPER_SIMULATION',
+      invalidReason: 'PAPER_EQUITY_NOT_CONFIGURED',
+    }, now.toISOString());
+    return null;
+  }
+
+  const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+  const realizedToday = Number(db.prepare(`
+    SELECT COALESCE(SUM(CAST(net_pnl AS REAL)), 0) AS total
+    FROM trades WHERE closed_at >= ? AND closed_at <= ?
+  `).get(dayStart, now.toISOString())?.total ?? 0);
+  const riskUnit = Number(snapshot.equity) * Number(config.risk.riskPerTradePct) / 100;
+  const dailyLossR = Number.isFinite(realizedToday) && riskUnit > 0
+    ? Math.max(0, round(-realizedToday / riskUnit, 6)) : 0;
+  writeState(db, 'riskMetrics', {
+    equity: Number(snapshot.equity),
+    currency: String(snapshot.currency).trim().toUpperCase(),
+    dailyLossR,
+    drawdownPct: nonNegative(snapshot.drawdownPct) ? Number(snapshot.drawdownPct) : 0,
+    maxSpreadPrice: config.risk.maxSpreadPrice,
+    source: 'PAPER_SIMULATION',
+  }, now.toISOString());
+  return readState(db, 'riskMetrics', null);
 }
 
 function candleValid(candle) {
@@ -548,6 +588,7 @@ export class PaperWorker {
         for (const reason of result.reasons ?? []) if (!execution.reasons.includes(reason)) execution.reasons.push(reason);
       }
       capturePaperEquitySnapshot(this.db, now);
+      if (readState(this.db, 'paperMode', config.paperMode) === true) persistPaperRiskState(this.db, now);
       const telemetry = {
         durationMs: elapsedMilliseconds(tickStartedAt, this.monotonicNow()),
         dependencies,

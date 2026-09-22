@@ -117,6 +117,8 @@ jobs:
           upsert_env NEXORA_MARKET_SOURCE twelvedata
           upsert_env NEXORA_SYMBOLS XAUUSD
           upsert_env NEXORA_PAPER_SPREAD_PRICE 0.20
+          upsert_env NEXORA_PAPER_STARTING_EQUITY 10000
+          upsert_env NEXORA_PAPER_CURRENCY USD
           upsert_env PAPER_MODE true
           upsert_env LIVE_TRADING_ENABLED false
           if [ -s "$APP_PATH/.nexora_twelvedata_api_key" ]; then
