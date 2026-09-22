@@ -142,9 +142,19 @@
     const spreadPrice = market?.spreadPrice ?? (Number.isFinite(bid) && Number.isFinite(ask) && ask >= bid ? ask - bid : null);
     const spreadPoints = market?.spreadPoints;
     setText('[data-market="spread"]', spreadPrice == null ? '—' : `${price(spreadPrice)} USD${spreadPoints == null ? '' : ` · ${Number(spreadPoints).toFixed(1)} pts`}`);
-    setText('[data-market="change"]', market?.quote ? 'Change unavailable' : 'No verified quote');
+    const change24h = market?.overview?.change24hPct;
+    setText('[data-market="change"]', change24h == null ? (market?.quote ? '24H change unavailable' : 'No verified quote') : `${change24h >= 0 ? '+' : ''}${percent(change24h)} 24H`);
+    const changeElement = $('[data-market="change"]');
+    changeElement?.classList.toggle('positive', Number(change24h) > 0);
+    changeElement?.classList.toggle('negative', Number(change24h) < 0);
+    setText('#market24hRange', market?.overview?.high24h != null && market?.overview?.low24h != null
+      ? `${price(market.overview.high24h)} / ${price(market.overview.low24h)}` : 'UNAVAILABLE');
+    setText('#market24hVolume', market?.overview?.volume24h == null
+      ? (market?.overview?.volumeStatus === 'UNAVAILABLE_SPOT_VOLUME' ? 'N/A · OTC spot' : 'UNAVAILABLE')
+      : Number(market.overview.volume24h).toLocaleString('en-US'));
+    setText('#marketDerivatives', market?.overview?.derivatives?.status === 'NOT_APPLICABLE' ? 'N/A · spot XAU' : 'UNAVAILABLE');
     setText('[data-market="freshness"]', market?.dataFreshness ?? 'UNAVAILABLE');
-    setText('#marketSource', `${market?.source ?? 'none'} · ${market?.reason ?? 'No verified feed'}`);
+    setText('#marketSource', `${market?.source ?? 'none'} · VPS read-only proxy · ${market?.reason ?? 'No verified feed'}`);
     setText('#marketBadge', market?.status === 'BROKER' ? 'BROKER DATA' : market?.status ?? 'NO FEED');
     setText('#candleTimestamp', market?.lastClosedCandleAt ? `Closed ${timeOf(market.lastClosedCandleAt)}` : 'No closed candle received');
     setText('#chartEmpty', market?.quote ? 'Quote received · waiting for verified closed candles.' : 'Connect a verified market-data feed to display candles.');
@@ -188,7 +198,7 @@
       xLabels.hidden = true;
       area.classList.add('chart-empty-area');
       empty.hidden = false;
-      setText('#chartEmpty', `No verified ${selectedTimeframe} broker candles · ${payload?.reason ?? 'feed unavailable'}`);
+      setText('#chartEmpty', `No verified ${selectedTimeframe} market candles · ${payload?.reason ?? 'feed unavailable'}`);
       return;
     }
 
@@ -261,7 +271,7 @@
     const dateLabels = [candles[0], candles[Math.floor((candles.length - 1) / 2)], last]
       .map((item) => makeElement('span', '', new Date(item.closedAt).toLocaleString('en-GB', { timeZone: 'UTC', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })));
     xLabels.replaceChildren(...dateLabels);
-    svg.setAttribute('aria-label', `Verified closed ${selectedTimeframe} XAUUSD broker candles, latest close ${price(last.close)} at ${last.closedAt}`);
+    svg.setAttribute('aria-label', `Verified closed ${selectedTimeframe} XAUUSD market candles, latest close ${price(last.close)} at ${last.closedAt}`);
     svg.hidden = false;
     yLabels.hidden = false;
     xLabels.hidden = false;
@@ -434,7 +444,7 @@
               method: 'POST', body: JSON.stringify({ positionId }),
             });
             if (!response.ok) {
-              const reason = body.error === 'VERIFIED_FRESH_BROKER_QUOTE_REQUIRED' ? 'Close held: fresh broker quote is unavailable.'
+              const reason = body.error === 'VERIFIED_FRESH_BROKER_QUOTE_REQUIRED' ? 'Close held: fresh market quote is unavailable.'
                 : body.error === 'PAPER_COST_MODEL_UNAVAILABLE' ? 'Close held: paper cost assumptions are unavailable.'
                   : body.error === 'POSITION_NOT_OPEN' ? 'This position is no longer open.'
                     : `Paper close rejected safely (${body.error ?? 'service unavailable'}).`;
@@ -599,7 +609,8 @@
       const quote = item.quote ?? {};
       const priceRow = makeElement('div', 'watch-card-price');
       priceRow.append(makeElement('span', '', quote.last == null ? '—' : price(quote.last)));
-      priceRow.append(makeElement('small', '', item.spreadPrice == null ? 'spread —' : `spread ${price(item.spreadPrice)}`));
+      const change = item.overview?.change24hPct;
+      priceRow.append(makeElement('small', '', change == null ? '24H —' : `${change >= 0 ? '+' : ''}${percent(change)} 24H`));
       const meta = makeElement('div', 'watch-card-meta', `${item.source ?? 'none'} · observed ${timeOf(quote.observedAt)} · M15 ${item.lastClosedCandleAt ? timeOf(item.lastClosedCandleAt) : '—'}`);
       card.append(top, priceRow, meta);
       container.append(card);
@@ -728,7 +739,7 @@
       const readinessReasons = [];
       if (!data.worker?.running) readinessReasons.push('worker not ready');
       if (!broker.connected) readinessReasons.push('broker offline');
-      if (data.market?.dataFreshness !== 'FRESH') readinessReasons.push('fresh broker quote unavailable');
+      if (data.market?.dataFreshness !== 'FRESH') readinessReasons.push('fresh market quote unavailable');
       if (data.news?.status !== 'HEALTHY') readinessReasons.push('news calendar unavailable or stale');
       if (risk.freshness !== 'FRESH') readinessReasons.push('risk state unavailable or stale');
       else if (risk.reasons?.length) readinessReasons.push(...risk.reasons.map((reason) => reason.toLowerCase().replaceAll('_', ' ')));

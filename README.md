@@ -1,6 +1,6 @@
 # NEXORA XAU Forex Auto Trading
 
-Local-first XAUUSD analysis and paper-trading terminal. This workspace has **no live broker adapter** and does not send live orders. With no verified market/news provider configured, the app intentionally reports offline/unavailable and blocks entries.
+Local-first XAUUSD analysis and paper-trading terminal. This workspace has **no live order adapter** and does not send live orders. It can consume a read-only Twelve Data XAU/USD feed while all execution remains paper-only.
 
 ## Requirements and run
 
@@ -28,9 +28,9 @@ The dashboard is read-only until a local operator token is configured. Set `NEXO
 - Strategy/voting/entry-plan parameters are injected into the domain, validated against safety floors, and content-fingerprinted with per-threshold rationales; every persisted scan stores its effective config manifest. Logical once-per-closed-M15 idempotency is independent of that config fingerprint.
 - A persistent paper lifecycle: provider-agnostic quote/candle/news ingestion contracts, once-per-new-closed-M15 scans, bid/ask order matching, partial fills, TP1/TP2/SL/expiry/manual close, ledger/trade snapshots, and duplicate replay protections.
 - Paper matching enforces explicit entry latency and fill-ratio assumptions, applies fixed adverse slippage to market/stop exits, caps TP exits at their limit prices, applies each partial fill once per increasing quote timestamp, respects minimum-lot steps, and protects minimum-lot positions at TP1 without inventing an impossible partial close.
-- Authenticated local controls for pause/resume, scan, paper ON/OFF, and manual paper-position close. Manual close requires a fresh verified broker quote and records `MANUAL_CLOSE` through the same transactional journal/audit path; it cannot send a live order. Paper OFF cancels unfilled paper quantity, preserves open-position monitoring, and cannot be undone by a restart; enabling paper leaves entries paused.
+- Authenticated local controls for pause/resume, scan, paper ON/OFF, and manual paper-position close. Manual close requires a fresh accepted market quote and records `MANUAL_CLOSE` through the same transactional journal/audit path; it cannot send a live order. Paper OFF cancels unfilled paper quantity, preserves open-position monitoring, and cannot be undone by a restart; enabling paper leaves entries paused.
 - A persisted trade-review journal with objective setup/market tags, realized periods, drawdown in R, fills/duration/MAE/MFE, exits, and cohort slices. Interpretive metrics stay hidden below 30 closed trades; money metrics are also hidden when account currency is unavailable or mixed.
-- Verified closed-broker candle chart API for M15/M30/H1/H4, EMA/ATR/volume/volatility context, latest stored MTF decision evidence, and a news-calendar status endpoint. Empty feed means an empty chart—not demo price action.
+- Verified closed-market candle chart API for M15/M30/H1/H4, EMA/ATR/volume/volatility context, 24-hour XAU overview, explicit spot-derivative `N/A` fields, latest stored MTF decision evidence, and a news-calendar status endpoint. Empty feed means an empty chart—not demo price action.
 - Validated consistent SQLite backup and restore-to-new-candidate commands.
 - Offline chronological walk-forward research replay using the same local worker and paper lifecycle, with dataset hashing, anti-look-ahead checks, quote-gap/scan-coverage disclosure, and synthetic-result suppression.
 - Optional Telegram command bridge and event/daily-summary notification outbox, disabled by default and covered by mocked delivery tests only.
@@ -40,8 +40,9 @@ Architecture choices and their review conditions are recorded in [ADR-001](docs/
 
 ## Deliberately unavailable
 
-- No broker has been selected or connected; there are no broker credentials or contract metadata. No real bid/ask, candles, account balance, equity, news calendar, or live PnL is present.
-- Provider interfaces and the worker schedule are implemented, but no real provider adapter is configured. Consequently this installation ingests no real market/news data and cannot perform a live-feed forward paper test.
+- No live broker has been selected or connected; there are no broker credentials or contract metadata. No account balance, equity, news calendar, or live PnL is present. A read-only market-data provider can supply quote/candle observations without enabling trading.
+- The default installation has no provider configured. Set `NEXORA_MARKET_SOURCE=twelvedata`, provide `NEXORA_TWELVEDATA_API_KEY`, and explicitly set `NEXORA_PAPER_SPREAD_PRICE` to enable the read-only XAU/USD feed. Twelve Data supplies the mid-price; the configured spread is a paper assumption and is never presented as an observed broker spread.
+- The dashboard market contract is served by `server.js` on the VPS: the browser reads `/api/market` and `/api/dashboard`, while provider credentials and upstream calls stay on the VPS. The XAU overview reports 24-hour change/high/low from closed M15 bars and clearly labels provider tick volume; spot XAU/USD has no single consolidated exchange volume, funding rate, or open interest.
 - The persistent paper lifecycle is implemented and tested against deterministic fixtures; fixture tests are not evidence of real-market fill quality or strategy performance.
 - No configured Telegram bot/provider, public hosting, or live execution path. Telegram commands and notifications remain disabled unless separately configured and explicitly authorized.
 - Nothing in the included synthetic tests establishes strategy profitability.
@@ -61,7 +62,7 @@ Evaluation accepts owner-classified broker history only; it never connects to a 
 
 - `GET /healthz` — liveness, readiness reasons, DB/worker/provider state, latest-cycle diagnostics, and retained one-hour worker telemetry.
 - `GET /api/telemetry/worker?window=1h|24h` — bounded aggregate cycle/dependency p50/p95/error summaries from local SQLite; no raw provider payloads, request samples, external tracing, or broker execution measurements.
-- `GET /api/dashboard`, `/bot/status`, `/api/market`, `/api/market/candles?timeframe=M15|M30|H1|H4`, `/api/mtf/latest`, `/api/news`, `/api/positions`, `/api/orders`, `/api/trades`, `/api/stats`, `/api/audit`, `/api/scan/latest`.
+- `GET /api/dashboard`, `/bot/status`, `/api/market`, `/api/market/overview`, `/api/market/candles?timeframe=M15|M30|H1|H4`, `/api/mtf/latest`, `/api/news`, `/api/positions`, `/api/orders`, `/api/trades`, `/api/stats`, `/api/audit`, `/api/scan/latest`.
 - `POST /api/actions/pause`, `/resume`, `/scan`, `/paper`, `/close` require same-origin, a configured `Authorization: Bearer` operator token, and an `Idempotency-Key`. Mutations return `503 CONTROL_AUTH_NOT_CONFIGURED` until a token is configured. `/paper` accepts `{ "enabled": true|false }`; `/close` accepts only `{ "positionId": "..." }` and fails closed unless that paper position is open and a fresh verified broker quote plus cost assumptions are available. Resume remains blocked unless paper mode and readiness checks are both on.
 
 ## Tests and checks

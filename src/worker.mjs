@@ -208,11 +208,19 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
   try {
     for (const { quote, symbol, observedTime, fresh } of normalizedQuotes) {
       const quoteStatus = fresh ? source : 'STALE';
+      const marketOverview = payload?.marketOverviewBySymbol?.[symbol]
+        ?? (symbol === 'XAUUSD' ? payload?.marketOverview : null)
+        ?? null;
       db.prepare(`
         INSERT INTO market_snapshots (id, symbol, source, status, bid, ask, last, observed_at, received_at, details_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(randomUUID(), symbol, source, quoteStatus, String(quote.bid), String(quote.ask), quote.last == null ? null : String(quote.last),
-        new Date(observedTime).toISOString(), receivedAt, JSON.stringify({ provider: safeProvider, spreadModel: payload.paperSpread ?? null, reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW' }));
+        new Date(observedTime).toISOString(), receivedAt, JSON.stringify({
+          provider: safeProvider,
+          spreadModel: payload.paperSpread ?? null,
+          marketOverview,
+          reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
+        }));
 
       const candlesByTimeframe = payload?.candlesBySymbol?.[symbol] ?? (symbol === 'XAUUSD' ? payload?.candlesByTimeframe : null) ?? {};
       for (const [timeframe, supplied] of Object.entries(candlesByTimeframe)) {
@@ -273,11 +281,16 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
     dataFreshness: primary.fresh ? 'FRESH' : 'STALE', bid: Number(primary.quote.bid), ask: Number(primary.quote.ask),
     last: primary.quote.last == null ? null : Number(primary.quote.last), observedAt: new Date(primary.observedTime).toISOString(),
     receivedAt, reason: primary.fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
-    quotesBySymbol: Object.fromEntries(normalizedQuotes.map(({ quote, symbol, observedTime, fresh }) => [symbol, {
-      symbol, source, status: fresh ? source : 'STALE', dataFreshness: fresh ? 'FRESH' : 'STALE',
-      bid: Number(quote.bid), ask: Number(quote.ask), last: quote.last == null ? null : Number(quote.last),
-      observedAt: new Date(observedTime).toISOString(), receivedAt,
-    }])),
+      quotesBySymbol: Object.fromEntries(normalizedQuotes.map(({ quote, symbol, observedTime, fresh }) => [symbol, {
+        symbol, source, status: fresh ? source : 'STALE', dataFreshness: fresh ? 'FRESH' : 'STALE',
+        bid: Number(quote.bid), ask: Number(quote.ask), last: quote.last == null ? null : Number(quote.last),
+        observedAt: new Date(observedTime).toISOString(), receivedAt,
+        overview: payload?.marketOverviewBySymbol?.[symbol]
+          ?? (symbol === 'XAUUSD' ? payload?.marketOverview : null)
+          ?? null,
+      }])),
+    marketOverview: payload?.marketOverview ?? null,
+    marketOverviewBySymbol: payload?.marketOverviewBySymbol ?? {},
   };
 }
 

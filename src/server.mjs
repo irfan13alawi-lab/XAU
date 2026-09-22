@@ -40,6 +40,7 @@ const OBSERVED_ROUTES = new Map([
   ['/bot/status', 'bot.status'],
   ['/api/dashboard', 'dashboard.api'],
   ['/api/market', 'market'],
+  ['/api/market/overview', 'market.overview'],
   ['/api/market/candles', 'market.candles'],
   ['/api/mtf/latest', 'mtf.latest'],
   ['/api/news', 'news'],
@@ -104,6 +105,11 @@ function createMarketProvider() {
 
 function parseJson(value, fallback = null) {
   try { return typeof value === 'string' ? JSON.parse(value) : value ?? fallback; } catch { return fallback; }
+}
+
+function marketOverview(row) {
+  const details = parseJson(row?.details_json, {});
+  return details && typeof details === 'object' && !Array.isArray(details) ? details.marketOverview ?? null : null;
 }
 
 function positionLastMarkAt(snapshotValue, now) {
@@ -360,6 +366,7 @@ function marketWatchlistSnapshot(db, now = new Date()) {
       status: latest?.status ?? 'UNAVAILABLE',
       dataFreshness: fresh ? 'FRESH' : latest ? 'STALE' : 'UNAVAILABLE',
       quote: latest ? { bid: latest.bid, ask: latest.ask, last: latest.last, observedAt: latest.observed_at } : null,
+      overview: marketOverview(latest),
       spreadPrice: latest?.bid != null && latest?.ask != null ? Number(latest.ask) - Number(latest.bid) : null,
       lastClosedCandleAt: lastCandle?.closed_at ?? null,
       candleSource: lastCandle?.source ?? null,
@@ -487,6 +494,14 @@ export function dashboardSnapshot(db, now = new Date()) {
         last: latestMarket.last,
         observedAt: latestMarket.observed_at,
       } : null,
+      overview: marketOverview(latestMarket),
+      dataContract: {
+        marketData: 'READ_ONLY_VPS_PROXY',
+        execution: 'PAPER_ONLY',
+        provider: latestMarket ? config.marketSource : 'none',
+        marketType: 'SPOT_OTC',
+        derivatives: 'NOT_APPLICABLE_FOR_SPOT_XAU',
+      },
       lastClosedCandleAt: lastClosedCandle?.closed_at ?? null,
       candleSource: lastClosedCandle?.source ?? null,
       candleQuality: lastClosedCandle?.quality ?? null,
@@ -780,6 +795,9 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
         return jsonResponse(res, 200, workerTelemetrySnapshot(db, now, window));
       }
       if (method === 'GET' && url.pathname === '/api/market') {
+        return jsonResponse(res, 200, dashboardSnapshot(db, now).market);
+      }
+      if (method === 'GET' && url.pathname === '/api/market/overview') {
         return jsonResponse(res, 200, dashboardSnapshot(db, now).market);
       }
       if (method === 'GET' && url.pathname === '/api/market/candles') {

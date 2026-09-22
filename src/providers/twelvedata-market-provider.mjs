@@ -11,6 +11,7 @@ const TIMEFRAMES = Object.freeze({
 const QUOTE_CACHE_MS = 10_000;
 const CANDLE_CACHE_MS = 5 * 60_000;
 const CANDLE_COUNT = 300;
+const DAY_MS = 24 * 60 * 60_000;
 
 function number(value) {
   const parsed = Number(value);
@@ -101,6 +102,53 @@ function candlesFromResponse(body, symbol, timeframe, now) {
   }).filter(Boolean).sort((left, right) => Date.parse(left.closedAt) - Date.parse(right.closedAt));
 }
 
+function marketOverviewFromCandles(symbol, quote, candlesByTimeframe, now) {
+  const candles = Array.isArray(candlesByTimeframe?.M15) ? candlesByTimeframe.M15 : [];
+  const cutoff = now.getTime() - DAY_MS;
+  const last24h = candles.filter((candle) => {
+    const closedAt = Date.parse(candle.closedAt ?? '');
+    return Number.isFinite(closedAt) && closedAt > cutoff && closedAt <= now.getTime();
+  });
+  const reference = candles.filter((candle) => {
+    const closedAt = Date.parse(candle.closedAt ?? '');
+    return Number.isFinite(closedAt) && closedAt <= cutoff;
+  }).at(-1) ?? null;
+  const last = number(quote?.last);
+  const referenceClose = number(reference?.close);
+  const change24hPct = last != null && referenceClose != null && referenceClose > 0
+    ? Number(((last - referenceClose) / referenceClose * 100).toFixed(4)) : null;
+  const highs = last24h.map((candle) => number(candle.high)).filter((value) => value != null);
+  const lows = last24h.map((candle) => number(candle.low)).filter((value) => value != null);
+  const volumes = last24h.map((candle) => candle.tickVolume);
+  const volumeAvailable = volumes.length > 0 && volumes.every((value) => Number.isFinite(Number(value)) && Number(value) >= 0);
+  const volume24h = volumeAvailable ? Number(volumes.reduce((sum, value) => sum + Number(value), 0).toFixed(4)) : null;
+  return {
+    symbol,
+    marketType: 'SPOT_OTC',
+    source: SOURCE,
+    provider: 'TwelveData',
+    observedAt: quote?.observedAt ?? null,
+    change24hPct,
+    high24h: highs.length ? Math.max(...highs) : null,
+    low24h: lows.length ? Math.min(...lows) : null,
+    volume24h,
+    volumeStatus: volumeAvailable ? 'PROVIDER_TICK_VOLUME' : 'UNAVAILABLE_SPOT_VOLUME',
+    volumeNote: 'Spot XAU/USD has no single consolidated exchange volume; this is provider tick volume when supplied.',
+    derivatives: {
+      fundingRate: null,
+      openInterest: null,
+      status: 'NOT_APPLICABLE',
+      reason: 'Funding rate and open interest are not spot XAU/USD fields.',
+    },
+    history: {
+      timeframe: 'M15',
+      bars24h: last24h.length,
+      referenceClosedAt: reference?.closedAt ?? null,
+      status: change24hPct == null ? 'INSUFFICIENT_HISTORY' : 'READY',
+    },
+  };
+}
+
 export class TwelveDataMarketDataProvider {
   #quoteCache = new Map();
   #candleCache = new Map();
@@ -153,11 +201,13 @@ export class TwelveDataMarketDataProvider {
   async readMarketData(now = new Date(), { signal } = {}) {
     const quotesBySymbol = {};
     const candlesBySymbol = {};
+    const marketOverviewBySymbol = {};
     const errors = [];
     for (const symbol of this.symbols) {
       try {
         quotesBySymbol[symbol] = await this.#readQuote(symbol, now, signal);
         candlesBySymbol[symbol] = await this.#readCandles(symbol, now, signal);
+        marketOverviewBySymbol[symbol] = marketOverviewFromCandles(symbol, quotesBySymbol[symbol], candlesBySymbol[symbol], now);
       } catch (error) {
         if (symbol === PRIMARY_SYMBOL) throw error;
         errors.push({ symbol, reason: /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code ?? '') ? error.code : 'MARKET_DATA_PROVIDER_ERROR' });
@@ -170,6 +220,8 @@ export class TwelveDataMarketDataProvider {
       candlesByTimeframe: candlesBySymbol[PRIMARY_SYMBOL] ?? {},
       quotesBySymbol,
       candlesBySymbol,
+      marketOverview: marketOverviewBySymbol[PRIMARY_SYMBOL] ?? null,
+      marketOverviewBySymbol,
       errors,
       paperSpread: { type: 'FIXED_AROUND_MID', price: configuredSpread() },
     };
