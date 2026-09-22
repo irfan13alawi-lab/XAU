@@ -23,6 +23,7 @@ const TELEMETRY_ERROR_CLASSES = new Set([
   'DEPENDENCY_TIMEOUT', 'SQLITE_BUSY', 'SQLITE_CORRUPT', 'SQLITE_IOERR',
   'BROKER_REJECTED', 'RATE_LIMITED', 'TYPE_ERROR', 'UNCLASSIFIED',
 ]);
+const MARKET_SNAPSHOT_REFRESH_MS = 60_000;
 
 function elapsedMilliseconds(start, end) {
   const elapsed = Number(end) - Number(start);
@@ -257,16 +258,32 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
       const marketOverview = payload?.marketOverviewBySymbol?.[symbol]
         ?? (symbol === 'XAUUSD' ? payload?.marketOverview : null)
         ?? null;
-      db.prepare(`
-        INSERT INTO market_snapshots (id, symbol, source, status, bid, ask, last, observed_at, received_at, details_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(randomUUID(), symbol, source, quoteStatus, String(quote.bid), String(quote.ask), quote.last == null ? null : String(quote.last),
-        new Date(observedTime).toISOString(), receivedAt, JSON.stringify({
-          provider: safeProvider,
-          spreadModel: payload.paperSpread ?? null,
-          marketOverview,
-          reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
-        }));
+      const previousSnapshot = db.prepare(`
+        SELECT source, status, bid, ask, last, observed_at, received_at
+        FROM market_snapshots WHERE symbol = ? ORDER BY received_at DESC LIMIT 1
+      `).get(symbol);
+      const observedAt = new Date(observedTime).toISOString();
+      const sameQuote = previousSnapshot
+        && previousSnapshot.source === source
+        && previousSnapshot.bid === String(quote.bid)
+        && previousSnapshot.ask === String(quote.ask)
+        && previousSnapshot.last === (quote.last == null ? null : String(quote.last))
+        && previousSnapshot.observed_at === observedAt;
+      const previousReceivedAt = Date.parse(previousSnapshot?.received_at ?? '');
+      const snapshotRefreshDue = !Number.isFinite(previousReceivedAt)
+        || now.getTime() - previousReceivedAt >= MARKET_SNAPSHOT_REFRESH_MS;
+      if (!sameQuote || snapshotRefreshDue || previousSnapshot.status !== quoteStatus) {
+        db.prepare(`
+          INSERT INTO market_snapshots (id, symbol, source, status, bid, ask, last, observed_at, received_at, details_json)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(randomUUID(), symbol, source, quoteStatus, String(quote.bid), String(quote.ask), quote.last == null ? null : String(quote.last),
+          observedAt, receivedAt, JSON.stringify({
+            provider: safeProvider,
+            spreadModel: payload.paperSpread ?? null,
+            marketOverview,
+            reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
+          }));
+      }
 
       const candlesByTimeframe = payload?.persistCandlesBySymbol?.[symbol]
         ?? payload?.candlesBySymbol?.[symbol]
