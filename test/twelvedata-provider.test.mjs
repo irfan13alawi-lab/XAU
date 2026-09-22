@@ -4,7 +4,7 @@ import { test } from 'node:test';
 function candleRows(now, intervalMinutes, count, volume = true) {
   const intervalMs = intervalMinutes * 60_000;
   return Array.from({ length: count }, (_, index) => {
-    const startedAt = now.getTime() - intervalMs * (index + 1);
+    const startedAt = now.getTime() - intervalMs * (index + 1) - 5 * 60_000;
     const close = 2000 + (count - index) * 0.25;
     return {
       datetime: new Date(startedAt).toISOString().replace('T', ' ').replace('.000Z', ''),

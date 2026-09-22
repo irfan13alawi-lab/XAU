@@ -15,7 +15,11 @@ const QUOTE_CACHE_MS = 60_000;
 const CANDLE_CACHE_MS = 5 * 60_000;
 const CANDLE_COUNT = 300;
 const DAY_MS = 24 * 60 * 60_000;
-const CANDLE_CYCLE_MS = 60_000;
+// Quotes and one candle timeframe refresh in the background every two minutes.
+// Rotating four timeframes keeps M15 comfortably inside its freshness window
+// while leaving headroom under Twelve Data's per-minute credit limit.
+const CANDLE_CYCLE_MS = 2 * 60_000;
+const CANDLE_SETTLE_DELAY_MS = 2 * 60_000;
 const TIMEFRAME_NAMES = Object.freeze(Object.keys(TIMEFRAMES));
 
 function number(value) {
@@ -131,7 +135,8 @@ function candlesFromResponse(body, symbol, timeframe, now) {
     const low = number(row?.low);
     const close = number(row?.close);
     const volume = row?.volume == null ? null : number(row.volume);
-    if (![open, high, low, close].every((value) => value != null) || closedAt.getTime() > now.getTime()) return null;
+    if (![open, high, low, close].every((value) => value != null)
+      || closedAt.getTime() > now.getTime() - CANDLE_SETTLE_DELAY_MS) return null;
     return {
       symbol,
       open, high, low, close,
@@ -198,6 +203,8 @@ export class TwelveDataMarketDataProvider {
   #lastCandleCycleAt = 0;
   #candleCursor = 0;
   #lastEmittedCandleAt = new Map();
+  #backgroundTimer = null;
+  #backgroundRefreshInFlight = false;
 
   constructor({ symbols = config.symbols } = {}) {
     const normalized = [...new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()))];
@@ -229,11 +236,11 @@ export class TwelveDataMarketDataProvider {
     return quotes;
   }
 
-  async #readQuotes(now, signal) {
+  async #readQuotes(now, signal, { force = false } = {}) {
     const key = apiKey();
     if (!key) throw errorWithCode('TWELVEDATA_API_KEY_MISSING');
     const cachedQuotes = this.#cachedQuotes(now);
-    const missing = this.symbols.filter((symbol) => !cachedQuotes[symbol]);
+    const missing = force ? this.symbols : this.symbols.filter((symbol) => !cachedQuotes[symbol]);
     if (!missing.length || Date.now() < this.#marketDataRetryAt) return cachedQuotes;
     // Twelve Data accepts comma-separated symbols on currency_conversion. One
     // batched request keeps the four-symbol watchlist within the provider's
@@ -277,11 +284,45 @@ export class TwelveDataMarketDataProvider {
     this.#recordSuccess();
   }
 
+  #startBackgroundFeed() {
+    if (this.#backgroundTimer || !apiKey() || configuredSpread() == null) return;
+    this.#backgroundTimer = setInterval(() => { void this.#refreshBackgroundFeed(); }, CANDLE_CYCLE_MS);
+    this.#backgroundTimer.unref?.();
+  }
+
+  async #refreshBackgroundFeed() {
+    if (this.#backgroundRefreshInFlight) return;
+    this.#backgroundRefreshInFlight = true;
+    const now = new Date();
+    try {
+      try {
+        await this.#readQuotes(now, undefined, { force: true });
+      } catch (error) {
+        this.#recordFailure(error);
+      }
+      if (Date.now() - this.#lastCandleCycleAt >= CANDLE_CYCLE_MS && Date.now() >= this.#marketDataRetryAt) {
+        const timeframe = TIMEFRAME_NAMES[this.#candleCursor % TIMEFRAME_NAMES.length];
+        this.#candleCursor += 1;
+        this.#lastCandleCycleAt = Date.now();
+        try {
+          await this.#readCandleBatch(timeframe, now);
+        } catch (error) {
+          this.#recordFailure(error);
+        }
+      }
+    } finally {
+      this.#backgroundRefreshInFlight = false;
+    }
+  }
+
   async readHealth(now = new Date(), { signal } = {}) {
     if (!apiKey()) return { source: SOURCE, status: 'OFFLINE', checkedAt: now.toISOString(), reason: 'TWELVEDATA_API_KEY_MISSING' };
     if (configuredSpread() == null) return { source: SOURCE, status: 'OFFLINE', checkedAt: now.toISOString(), reason: 'PAPER_SPREAD_NOT_CONFIGURED' };
+    this.#startBackgroundFeed();
     try {
-      const quote = (await this.#readQuotes(now, signal))[PRIMARY_SYMBOL];
+      let quotes = this.#cachedQuotes(now);
+      if (!quotes[PRIMARY_SYMBOL]) quotes = await this.#readQuotes(now, signal);
+      const quote = quotes[PRIMARY_SYMBOL];
       if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
       const ageMs = now.getTime() - Date.parse(quote.observedAt);
       return { source: SOURCE, status: ageMs >= 0 && ageMs <= MARKET_QUOTE_MAX_AGE_MS ? 'HEALTHY' : 'STALE', checkedAt: now.toISOString(), reason: ageMs <= MARKET_QUOTE_MAX_AGE_MS ? null : 'MARKET_DATA_QUOTE_STALE' };
@@ -295,12 +336,14 @@ export class TwelveDataMarketDataProvider {
     let quotesBySymbol;
     const errors = [];
     try {
-      quotesBySymbol = await this.#readQuotes(now, signal);
+      quotesBySymbol = this.#cachedQuotes(now);
+      if (!quotesBySymbol[PRIMARY_SYMBOL]) quotesBySymbol = await this.#readQuotes(now, signal);
     } catch (error) {
       this.#recordFailure(error);
       throw error;
     }
-    if (Date.now() - this.#lastCandleCycleAt >= CANDLE_CYCLE_MS && Date.now() >= this.#marketDataRetryAt) {
+    const hasCachedCandles = [...this.#candleCache.values()].some((timeframes) => timeframes.size > 0);
+    if (!hasCachedCandles) {
       const timeframe = TIMEFRAME_NAMES[this.#candleCursor % TIMEFRAME_NAMES.length];
       this.#candleCursor += 1;
       this.#lastCandleCycleAt = Date.now();
@@ -344,5 +387,10 @@ export class TwelveDataMarketDataProvider {
       errors,
       paperSpread: { type: 'FIXED_AROUND_MID', price: configuredSpread() },
     };
+  }
+
+  stop() {
+    if (this.#backgroundTimer) clearInterval(this.#backgroundTimer);
+    this.#backgroundTimer = null;
   }
 }

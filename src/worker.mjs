@@ -10,9 +10,9 @@ import { isAcceptedMarketSource, isFreshMarketSnapshot, MARKET_QUOTE_MAX_AGE_MS 
 const TIMEFRAMES = new Set(['M15', 'M30', 'H1', 'H4']);
 const TIMEOUT_MS = 5_000;
 // The calendar payload is weekly and the readiness contract allows 30 minutes
-// of age. Refreshing every five minutes avoids hammering a public feed while
+// of age. Refreshing every ten minutes avoids hammering a public feed while
 // keeping the blackout gate current.
-const NEWS_REFRESH_MS = 5 * 60_000;
+const NEWS_REFRESH_MS = 10 * 60_000;
 const MAX_CANDLES_PER_FRAME = 300;
 const TELEMETRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const MAX_TELEMETRY_ROWS = 60_000;
@@ -247,6 +247,7 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
   let insertedCandles = 0;
   let rejectedCandles = 0;
   let conflicts = 0;
+  let repairedCandles = 0;
   db.exec('BEGIN IMMEDIATE');
   try {
     for (const { quote, symbol, observedTime, fresh } of normalizedQuotes) {
@@ -294,7 +295,20 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
             SELECT open_price, high_price, low_price, close_price, tick_volume, quality FROM candles
             WHERE symbol = ? AND timeframe = ? AND closed_at = ?
           `).get(symbol, timeframe, new Date(closedAt).toISOString());
-          if (existing && !valuesMatch(existing, candle) && existing.quality !== 'CONFLICT') {
+          if (existing?.quality === 'CONFLICT') {
+            db.prepare(`
+              UPDATE candles SET open_price = ?, high_price = ?, low_price = ?, close_price = ?, tick_volume = ?, quality = 'VERIFIED_CLOSED'
+              WHERE symbol = ? AND timeframe = ? AND closed_at = ?
+            `).run(String(candle.open), String(candle.high), String(candle.low), String(candle.close),
+              candle.tickVolume == null ? null : Number(candle.tickVolume), symbol, timeframe, new Date(closedAt).toISOString());
+            appendAudit(db, {
+              actor: 'market-data-adapter', eventType: 'MARKET_CANDLE_CONFLICT_REPAIRED', entityType: 'candle',
+              entityId: `${symbol}:${timeframe}:${new Date(closedAt).toISOString()}`,
+              reason: 'A previously conflicted candle was replaced by a settled closed-provider value.',
+              metadata: { symbol, timeframe, closedAt: new Date(closedAt).toISOString(), provider: safeProvider },
+            }, receivedAt);
+            repairedCandles += 1;
+          } else if (existing && !valuesMatch(existing, candle)) {
             db.prepare(`UPDATE candles SET quality = 'CONFLICT' WHERE symbol = ? AND timeframe = ? AND closed_at = ?`)
               .run(symbol, timeframe, new Date(closedAt).toISOString());
             appendAudit(db, {
@@ -311,7 +325,7 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
     const fresh = primary.fresh;
     writeState(db, 'marketDataHealth', {
       status: fresh ? 'HEALTHY' : 'STALE', provider: safeProvider, source, checkedAt: receivedAt,
-      symbols: normalizedQuotes.map((item) => item.symbol), insertedCandles, rejectedCandles, conflicts,
+      symbols: normalizedQuotes.map((item) => item.symbol), insertedCandles, rejectedCandles, conflicts, repairedCandles,
       reason: !fresh ? 'QUOTE_STALE_OR_CLOCK_SKEW' : rejectedCandles || conflicts ? 'CANDLE_QUALITY_ISSUES' : null,
     }, receivedAt);
     if (payload.riskMetrics != null) {
@@ -666,6 +680,7 @@ export class PaperWorker {
   }
 
   stop() {
+    this.provider?.stop?.();
     if (this.#timer) clearInterval(this.#timer);
     this.#timer = null;
     this.running = false;
