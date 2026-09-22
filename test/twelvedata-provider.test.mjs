@@ -190,3 +190,46 @@ test('Twelve Data adapter uses Swissquote read-only quotes when Twelve Data has 
     globalThis.fetch = previousFetch;
   }
 });
+
+test('market feed bypasses a Twelve Data rate limit with Biquote quotes and closed candles', async () => {
+  const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
+  const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
+  const previousFetch = globalThis.fetch;
+  process.env.NEXORA_TWELVEDATA_API_KEY = 'test-key-not-a-credential';
+  process.env.NEXORA_PAPER_SPREAD_PRICE = '0.20';
+  const now = new Date('2026-09-22T00:00:00.000Z');
+  const symbols = ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY'];
+  const biquoteRows = Array.from({ length: 120 }, (_, index) => ({
+    openTime: new Date(now.getTime() - (index + 2) * 15 * 60_000).toISOString(),
+    open: 2000 + index,
+    high: 2001 + index,
+    low: 1999 + index,
+    close: 2000.5 + index,
+    tickVolume: 100 + index,
+    isOpen: false,
+  }));
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === 'api.twelvedata.com') return new Response(JSON.stringify({ code: 429, status: 'error' }), { status: 200 });
+    if (url.hostname === 'forex-data-feed.swissquote.com') return new Response(JSON.stringify([]), { status: 200 });
+    if (url.hostname === 'biquote.io' && url.pathname.endsWith('/ohlc')) return new Response(JSON.stringify({ bars: biquoteRows }), { status: 200 });
+    const symbol = url.pathname.split('/').at(-1);
+    const index = symbols.indexOf(symbol);
+    return new Response(JSON.stringify({ symbol, bid: 2000 + index, ask: 2000.1 + index, mid: 2000.05 + index, timestamp: now.toISOString(), stale: false }), { status: 200 });
+  };
+  try {
+    const { TwelveDataMarketDataProvider } = await import('../src/providers/twelvedata-market-provider.mjs');
+    const provider = new TwelveDataMarketDataProvider({ symbols });
+    const payload = await provider.readMarketData(now);
+    assert.deepEqual(Object.keys(payload.quotesBySymbol).sort(), symbols.slice().sort());
+    for (const symbol of symbols) assert.equal(payload.candlesBySymbol[symbol].M15.length, 120);
+    assert.equal(payload.marketOverview.provider, 'Biquote');
+    provider.stop();
+  } finally {
+    if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
+    else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
+    if (previousSpread === undefined) delete process.env.NEXORA_PAPER_SPREAD_PRICE;
+    else process.env.NEXORA_PAPER_SPREAD_PRICE = previousSpread;
+    globalThis.fetch = previousFetch;
+  }
+});
