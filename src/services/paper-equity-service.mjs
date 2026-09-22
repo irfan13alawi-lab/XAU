@@ -13,14 +13,14 @@ function round(value) {
 }
 
 function latestPeak(db, equity) {
-  const row = db.prepare('SELECT MAX(CAST(equity AS REAL)) AS peak FROM equity_snapshots WHERE source = ?').get('PAPER_SIMULATION');
+  const row = db.prepare("SELECT MAX(CAST(equity AS REAL)) AS peak FROM equity_snapshots WHERE source = ? AND accounting_status = 'VALID'").get('PAPER_SIMULATION');
   return Math.max(numeric(row?.peak), numeric(equity));
 }
 
 export function latestPaperEquitySnapshot(db) {
   const row = db.prepare(`
     SELECT id, source, currency, balance, equity, realized_pnl, unrealized_pnl, drawdown_pct, observed_at, details_json
-    FROM equity_snapshots ORDER BY observed_at DESC LIMIT 1
+    FROM equity_snapshots WHERE accounting_status = 'VALID' ORDER BY observed_at DESC LIMIT 1
   `).get();
   if (!row) return null;
   return {
@@ -39,9 +39,9 @@ export function latestPaperEquitySnapshot(db) {
 
 export function capturePaperEquitySnapshot(db, now = new Date(), { force = false } = {}) {
   if (config.paperStartingEquity == null) return null;
-  const latest = db.prepare('SELECT observed_at FROM equity_snapshots WHERE source = ? ORDER BY observed_at DESC LIMIT 1').get('PAPER_SIMULATION');
+  const latest = db.prepare("SELECT observed_at, accounting_status FROM equity_snapshots WHERE source = ? ORDER BY observed_at DESC LIMIT 1").get('PAPER_SIMULATION');
   const latestAt = Date.parse(latest?.observed_at ?? '');
-  if (!force && Number.isFinite(latestAt) && now.getTime() - latestAt < SNAPSHOT_INTERVAL_MS) return latestPaperEquitySnapshot(db);
+  if (!force && latest?.accounting_status === 'VALID' && Number.isFinite(latestAt) && now.getTime() - latestAt < SNAPSHOT_INTERVAL_MS) return latestPaperEquitySnapshot(db);
 
   const realizedPnl = numeric(db.prepare("SELECT COALESCE(SUM(CAST(net_pnl AS REAL)), 0) AS total FROM trades WHERE accounting_status = 'VALID'").get()?.total);
   const unrealizedPnl = numeric(db.prepare("SELECT COALESCE(SUM(CAST(unrealized_pnl AS REAL)), 0) AS total FROM positions WHERE status IN ('OPEN', 'PARTIAL')").get()?.total);

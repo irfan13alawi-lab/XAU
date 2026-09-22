@@ -105,7 +105,7 @@ test('health separates process liveness from market readiness', async () => {
   assert.equal(body.buildId, config.buildId);
   assert.notEqual(body.buildId, 'LOCAL-UNVERSIONED');
   assert.match(body.buildId, /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/);
-  assert.equal(body.schemaVersion, 9);
+  assert.equal(body.schemaVersion, 10);
   assert.equal(body.controlActionsAvailable, true);
   assert.equal(body.worker.lastTick, null);
 });
@@ -917,7 +917,7 @@ test('SQLite state survives closing and reopening the database', () => {
   initializeDatabase(recoveredDb, new Date('2026-09-21T00:10:00.000Z'));
   assert.equal(readState(recoveredDb, 'entryPaused'), true);
   assert.equal(readState(recoveredDb, 'paperMode'), false);
-  assert.equal(recoveredDb.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get().n, 9);
+  assert.equal(recoveredDb.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get().n, 10);
   recoveredDb.close();
   rmSync(directory, { recursive: true, force: true });
 });

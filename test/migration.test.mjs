@@ -8,7 +8,7 @@ import { test } from 'node:test';
 
 const migrationsDirectory = fileURLToPath(new URL('../src/migrations/', import.meta.url));
 
-test('schema v5 database upgrades additively to v9 with audit, notification outbox, worker telemetry, equity snapshots, and trade integrity intact', () => {
+test('schema v5 database upgrades additively to v10 with audit, notification outbox, worker telemetry, equity snapshots, and trade integrity intact', () => {
   const temporaryDirectory = mkdtempSync(join(tmpdir(), 'nexora-migration-v5-v6-'));
   const legacyDirectory = join(temporaryDirectory, 'migrations-v5');
   const databasePath = join(temporaryDirectory, 'candidate.sqlite');
@@ -28,12 +28,14 @@ test('schema v5 database upgrades additively to v9 with audit, notification outb
 
     migrateDatabase(db, migrationsDirectory);
 
-    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 9);
+    assert.equal(db.prepare('SELECT COUNT(*) AS count FROM schema_migrations').get().count, 10);
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'telegram_notification_outbox'").get().name,
       'telegram_notification_outbox');
     assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'worker_cycle_metrics'").get().name,
       'worker_cycle_metrics');
     assert.equal(db.prepare("SELECT name FROM pragma_table_info('trades') WHERE name = 'accounting_status'").get().name,
+      'accounting_status');
+    assert.equal(db.prepare("SELECT name FROM pragma_table_info('equity_snapshots') WHERE name = 'accounting_status'").get().name,
       'accounting_status');
     assert.equal(db.prepare("SELECT reason FROM audit_events WHERE id = 'migration-test-audit'").get().reason, 'preserved');
     assert.equal(db.prepare('PRAGMA quick_check').get().quick_check, 'ok');
