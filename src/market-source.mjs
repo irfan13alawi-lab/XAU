@@ -8,3 +8,4 @@ export function isFreshMarketSnapshot(value) {
   const source = String(value?.source ?? '').trim().toUpperCase();
   return isAcceptedMarketSource(source) && value?.status === source;
 }
+

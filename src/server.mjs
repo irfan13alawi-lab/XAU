@@ -6,7 +6,9 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import { appendAudit, openDatabase, readState, runIdempotent, writeState } from './database.mjs';
 import { config } from './config.mjs';
-import { PaperWorker } from './worker.mjs';
+import { PaperWorker, UnavailableMarketDataProvider } from './worker.mjs';
+import { TwelveDataMarketDataProvider } from './providers/twelvedata-market-provider.mjs';
+import { isFreshMarketSnapshot } from './market-source.mjs';
 import { executePaperScan } from './services/paper-scan-service.mjs';
 import { atr, calculateIndicators, ema } from './domain/indicators.mjs';
 import { evaluateRiskGuard } from './domain/risk.mjs';
@@ -92,6 +94,11 @@ function latestBrokerHealth(db) {
     checked_at: null,
     details_json: JSON.stringify({ reason: 'No market-data provider is configured.' }),
   };
+}
+
+function createMarketProvider() {
+  if (config.marketProvider === 'twelvedata') return new TwelveDataMarketDataProvider();
+  return new UnavailableMarketDataProvider();
 }
 
 function parseJson(value, fallback = null) {
@@ -287,13 +294,13 @@ function marketCandlesSnapshot(db, timeframe, now = new Date()) {
   if (!duration) throw new TypeError('A supported timeframe is required: M15, M30, H1, or H4.');
   const candles = db.prepare(`
     SELECT open_price AS open, high_price AS high, low_price AS low, close_price AS close,
-      tick_volume AS tickVolume, closed_at AS closedAt
+      tick_volume AS tickVolume, closed_at AS closedAt, source
     FROM candles
-    WHERE symbol = 'XAUUSD' AND timeframe = ? AND source = 'BROKER' AND quality = 'VERIFIED_CLOSED'
+    WHERE symbol = 'XAUUSD' AND timeframe = ? AND source IN ('BROKER', 'MARKET_DATA') AND quality = 'VERIFIED_CLOSED'
     ORDER BY closed_at DESC LIMIT 200
   `).all(timeframe).reverse().map((item) => ({
     open: Number(item.open), high: Number(item.high), low: Number(item.low), close: Number(item.close),
-    tickVolume: item.tickVolume == null ? null : Number(item.tickVolume), closedAt: item.closedAt,
+    tickVolume: item.tickVolume == null ? null : Number(item.tickVolume), closedAt: item.closedAt, source: item.source,
   })).filter((item) => [item.open, item.high, item.low, item.close].every(Number.isFinite)
     && item.low <= Math.min(item.open, item.close) && item.high >= Math.max(item.open, item.close) && item.high >= item.low);
   const latest = candles.at(-1) ?? null;
@@ -315,10 +322,10 @@ function marketCandlesSnapshot(db, timeframe, now = new Date()) {
   const today = candles.filter((item) => item.closedAt.slice(0, 10) === utcDate);
   const indicators = calculateIndicators(candles);
   return {
-    symbol: 'XAUUSD', timeframe, source: latest ? 'BROKER' : 'none',
+    symbol: 'XAUUSD', timeframe, source: latest?.source ?? 'none',
     dataFreshness, lastClosedAt: latest?.closedAt ?? null,
     candleCount: candles.length, requiredCandles: 100, sufficientHistory: candles.length >= 100,
-    reason: !latest ? 'NO_VERIFIED_BROKER_CANDLES' : dataFreshness === 'STALE' ? 'CANDLE_HISTORY_STALE' : candles.length < 100 ? 'INSUFFICIENT_CLOSED_CANDLES' : null,
+    reason: !latest ? 'NO_VERIFIED_MARKET_CANDLES' : dataFreshness === 'STALE' ? 'CANDLE_HISTORY_STALE' : candles.length < 100 ? 'INSUFFICIENT_CLOSED_CANDLES' : null,
     candles,
     indicators,
     ema9Series: ema(closes, 9),
@@ -364,8 +371,7 @@ export function dashboardSnapshot(db, now = new Date()) {
   `).get() ?? null;
   const receivedAt = latestMarket?.received_at ? Date.parse(latestMarket.received_at) : NaN;
   const observedAt = latestMarket?.observed_at ? Date.parse(latestMarket.observed_at) : NaN;
-  const marketFresh = latestMarket?.source === 'BROKER'
-    && latestMarket.status === 'BROKER'
+  const marketFresh = isFreshMarketSnapshot(latestMarket)
     && Number.isFinite(receivedAt)
     && Number.isFinite(observedAt)
     && now.getTime() >= receivedAt
@@ -937,7 +943,7 @@ function handleAction(req, res, pathname, db, now, { researchRunner, researchInF
         `).get();
         const quote = latest ? {
           symbol: 'XAUUSD', source: latest.source,
-          dataFreshness: latest.source === 'BROKER' && latest.status === 'BROKER' ? 'FRESH' : 'STALE',
+          dataFreshness: isFreshMarketSnapshot(latest) ? 'FRESH' : 'STALE',
           bid: Number(latest.bid), ask: Number(latest.ask),
           observedAt: latest.observed_at, receivedAt: latest.received_at,
         } : null;
@@ -1156,7 +1162,7 @@ function bootstrap() {
         reason: 'Local paper-only service started; live execution capability is absent.',
         metadata: { buildId: config.buildId, schemaVersion: config.schemaVersion },
       });
-      worker = new PaperWorker({ db });
+      worker = new PaperWorker({ db, provider: createMarketProvider() });
       worker.start();
       initialized = true;
       const address = server.address();

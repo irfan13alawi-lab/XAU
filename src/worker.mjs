@@ -3,6 +3,7 @@ import { performance } from 'node:perf_hooks';
 import { appendAudit, readState, writeState } from './database.mjs';
 import { executePaperScan } from './services/paper-scan-service.mjs';
 import { reconcilePaperExecution } from './services/paper-lifecycle-service.mjs';
+import { isAcceptedMarketSource, isFreshMarketSnapshot } from './market-source.mjs';
 
 const TIMEFRAMES = new Set(['M15', 'M30', 'H1', 'H4']);
 const TIMEOUT_MS = 5_000;
@@ -182,44 +183,45 @@ export class UnavailableNewsCalendarProvider {
 
 export function persistMarketData(db, payload, providerName, now = new Date()) {
   const safeProvider = providerLabel(providerName);
+  const source = String(payload?.source ?? '').trim().toUpperCase();
   const quote = payload?.quote;
-  if (payload?.source !== 'BROKER' || quote?.symbol !== 'XAUUSD' || quote?.source !== 'BROKER'
+  if (!isAcceptedMarketSource(source) || quote?.symbol !== 'XAUUSD' || String(quote?.source ?? '').toUpperCase() !== source
     || !positive(quote.bid) || !positive(quote.ask) || Number(quote.ask) < Number(quote.bid)) {
-    throw new TypeError('Provider must return a normalized BROKER XAUUSD quote with valid bid/ask.');
+    throw new TypeError('Provider must return a normalized market XAUUSD quote with valid bid/ask.');
   }
   const observedTime = Date.parse(quote.observedAt ?? '');
   if (!Number.isFinite(observedTime)) throw new TypeError('Provider quote must include a valid observation timestamp.');
   const ageMs = now.getTime() - observedTime;
   const fresh = ageMs >= 0 && ageMs <= 30_000;
   const receivedAt = now.toISOString();
-  const quoteStatus = fresh ? 'BROKER' : 'STALE';
+  const quoteStatus = fresh ? source : 'STALE';
   const insertCandle = db.prepare(`
     INSERT OR IGNORE INTO candles (symbol, timeframe, closed_at, open_price, high_price, low_price, close_price, tick_volume, source, quality)
-    VALUES ('XAUUSD', ?, ?, ?, ?, ?, ?, ?, 'BROKER', 'VERIFIED_CLOSED')
+    VALUES ('XAUUSD', ?, ?, ?, ?, ?, ?, ?, ?, 'VERIFIED_CLOSED')
   `);
   const insertSnapshot = db.prepare(`
     INSERT INTO market_snapshots (id, symbol, source, status, bid, ask, last, observed_at, received_at, details_json)
-    VALUES (?, 'XAUUSD', 'BROKER', ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, 'XAUUSD', ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   let insertedCandles = 0;
   let rejectedCandles = 0;
   let conflicts = 0;
   db.exec('BEGIN IMMEDIATE');
   try {
-    insertSnapshot.run(randomUUID(), quoteStatus, String(quote.bid), String(quote.ask), quote.last == null ? null : String(quote.last),
-      new Date(observedTime).toISOString(), receivedAt, JSON.stringify({ provider: safeProvider, reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW' }));
+    insertSnapshot.run(randomUUID(), source, quoteStatus, String(quote.bid), String(quote.ask), quote.last == null ? null : String(quote.last),
+      new Date(observedTime).toISOString(), receivedAt, JSON.stringify({ provider: safeProvider, spreadModel: payload.paperSpread ?? null, reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW' }));
 
     for (const [timeframe, supplied] of Object.entries(payload.candlesByTimeframe ?? {})) {
       if (!TIMEFRAMES.has(timeframe) || !Array.isArray(supplied)) { rejectedCandles += 1; continue; }
       const candles = [...supplied].slice(-MAX_CANDLES_PER_FRAME).sort((a, b) => Date.parse(a.closedAt ?? '') - Date.parse(b.closedAt ?? ''));
       for (const candle of candles) {
         const closedAt = Date.parse(candle?.closedAt ?? '');
-        if (!candleValid(candle) || candle.source !== 'BROKER' || closedAt > now.getTime()) {
+        if (!candleValid(candle) || String(candle.source ?? '').toUpperCase() !== source || closedAt > now.getTime()) {
           rejectedCandles += 1;
           continue;
         }
         const result = insertCandle.run(timeframe, new Date(closedAt).toISOString(), String(candle.open), String(candle.high),
-          String(candle.low), String(candle.close), candle.tickVolume == null ? null : Number(candle.tickVolume));
+          String(candle.low), String(candle.close), candle.tickVolume == null ? null : Number(candle.tickVolume), source);
         if (Number(result.changes) > 0) {
           insertedCandles += 1;
           continue;
@@ -242,7 +244,7 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
       }
     }
     writeState(db, 'marketDataHealth', {
-      status: fresh ? 'HEALTHY' : 'STALE', provider: safeProvider, checkedAt: receivedAt,
+      status: fresh ? 'HEALTHY' : 'STALE', provider: safeProvider, source, checkedAt: receivedAt,
       insertedCandles, rejectedCandles, conflicts,
       reason: !fresh ? 'QUOTE_STALE_OR_CLOCK_SKEW' : rejectedCandles || conflicts ? 'CANDLE_QUALITY_ISSUES' : null,
     }, receivedAt);
@@ -257,7 +259,7 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
   }
 
   return {
-    symbol: 'XAUUSD', source: 'BROKER', status: quoteStatus,
+    symbol: 'XAUUSD', source, status: quoteStatus,
     dataFreshness: fresh ? 'FRESH' : 'STALE', bid: Number(quote.bid), ask: Number(quote.ask),
     last: quote.last == null ? null : Number(quote.last), observedAt: new Date(observedTime).toISOString(),
     receivedAt, reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
@@ -321,13 +323,13 @@ function freshClosedM15(db, now) {
     SELECT closed_at, source, quality FROM candles WHERE symbol = 'XAUUSD' AND timeframe = 'M15'
     ORDER BY closed_at DESC LIMIT 1
   `).get();
-  if (!candle || candle.source !== 'BROKER' || candle.quality !== 'VERIFIED_CLOSED') return null;
+  if (!candle || !isAcceptedMarketSource(candle.source) || candle.quality !== 'VERIFIED_CLOSED') return null;
   const closedAt = Date.parse(candle.closed_at);
   if (!Number.isFinite(closedAt) || closedAt > now.getTime() || now.getTime() - closedAt > 30 * 60_000) return null;
   const quote = db.prepare(`SELECT source, status, observed_at, received_at FROM market_snapshots ORDER BY received_at DESC LIMIT 1`).get();
   const observed = Date.parse(quote?.observed_at ?? '');
   const received = Date.parse(quote?.received_at ?? '');
-  if (quote?.source !== 'BROKER' || quote.status !== 'BROKER' || !Number.isFinite(observed) || !Number.isFinite(received)
+  if (!isFreshMarketSnapshot(quote) || !Number.isFinite(observed) || !Number.isFinite(received)
     || now.getTime() < observed || now.getTime() - observed > 30_000 || now.getTime() < received || now.getTime() - received > 30_000) return null;
   return candle.closed_at;
 }
