@@ -286,6 +286,7 @@ export class TwelveDataMarketDataProvider {
   #lastEmittedCandleAt = new Map();
   #quoteNetworkAttempted = false;
   #backgroundTimer = null;
+  #backgroundPrimingScheduled = false;
   #backgroundRefreshInFlight = false;
 
   constructor({ symbols = config.symbols } = {}) {
@@ -458,6 +459,15 @@ export class TwelveDataMarketDataProvider {
     if (this.#backgroundTimer || !apiKey() || configuredSpread() == null) return;
     this.#backgroundTimer = setInterval(() => { void this.#refreshBackgroundFeed(); }, CANDLE_CYCLE_MS);
     this.#backgroundTimer.unref?.();
+    // Hydrate the first candle timeframe off the worker tick. Mark the pending
+    // refresh synchronously so readMarketData never falls back to a blocking
+    // candle request during the same worker cycle.
+    this.#backgroundPrimingScheduled = true;
+    const prime = setTimeout(() => {
+      this.#backgroundPrimingScheduled = false;
+      if (this.#backgroundTimer) void this.#refreshBackgroundFeed();
+    }, 0);
+    prime.unref?.();
   }
 
   async #refreshBackgroundFeed() {
@@ -488,12 +498,12 @@ export class TwelveDataMarketDataProvider {
   async readHealth(now = new Date(), { signal } = {}) {
     if (!apiKey()) return { source: SOURCE, status: 'OFFLINE', checkedAt: now.toISOString(), reason: 'TWELVEDATA_API_KEY_MISSING' };
     if (configuredSpread() == null) return { source: SOURCE, status: 'OFFLINE', checkedAt: now.toISOString(), reason: 'PAPER_SPREAD_NOT_CONFIGURED' };
-    this.#startBackgroundFeed();
     try {
       let quotes = this.#cachedQuotes(now);
       if (!quotes[PRIMARY_SYMBOL]) quotes = await this.#readQuotes(now, signal);
       const quote = quotes[PRIMARY_SYMBOL];
       if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+      this.#startBackgroundFeed();
       const ageMs = now.getTime() - Date.parse(quote.observedAt);
       return { source: SOURCE, status: ageMs >= 0 && ageMs <= MARKET_QUOTE_MAX_AGE_MS ? 'HEALTHY' : 'STALE', checkedAt: now.toISOString(), reason: ageMs <= MARKET_QUOTE_MAX_AGE_MS ? null : 'MARKET_DATA_QUOTE_STALE' };
     } catch (error) {
@@ -513,7 +523,7 @@ export class TwelveDataMarketDataProvider {
       throw error;
     }
     const hasCachedCandles = [...this.#candleCache.values()].some((timeframes) => timeframes.size > 0);
-    if (!hasCachedCandles) {
+    if (!hasCachedCandles && !this.#backgroundRefreshInFlight && !this.#backgroundPrimingScheduled) {
       const timeframe = TIMEFRAME_NAMES[this.#candleCursor % TIMEFRAME_NAMES.length];
       this.#candleCursor += 1;
       this.#lastCandleCycleAt = now.getTime();
@@ -574,6 +584,7 @@ export class TwelveDataMarketDataProvider {
   stop() {
     if (this.#backgroundTimer) clearInterval(this.#backgroundTimer);
     this.#backgroundTimer = null;
+    this.#backgroundPrimingScheduled = false;
   }
 }
 
