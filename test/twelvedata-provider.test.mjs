@@ -161,3 +161,32 @@ test('Twelve Data adapter falls back to a single quote when a batch response omi
     globalThis.fetch = previousFetch;
   }
 });
+
+test('Twelve Data adapter uses Swissquote read-only quotes when Twelve Data has no quote value', async () => {
+  const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
+  const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
+  const previousFetch = globalThis.fetch;
+  process.env.NEXORA_TWELVEDATA_API_KEY = 'test-key-not-a-credential';
+  process.env.NEXORA_PAPER_SPREAD_PRICE = '0.20';
+  const now = new Date('2026-09-22T00:00:00.000Z');
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === 'forex-data-feed.swissquote.com') {
+      return new Response(JSON.stringify([{ ts: Math.floor(now.getTime() / 1000), spreadProfilePrices: [{ bid: '2030.00', ask: '2030.40' }] }]), { status: 200 });
+    }
+    return new Response(JSON.stringify({}), { status: 200 });
+  };
+  try {
+    const { TwelveDataMarketDataProvider } = await import('../src/providers/twelvedata-market-provider.mjs');
+    const provider = new TwelveDataMarketDataProvider({ symbols: ['XAUUSD'] });
+    const health = await provider.readHealth(now);
+    assert.equal(health.status, 'HEALTHY');
+    provider.stop();
+  } finally {
+    if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
+    else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
+    if (previousSpread === undefined) delete process.env.NEXORA_PAPER_SPREAD_PRICE;
+    else process.env.NEXORA_PAPER_SPREAD_PRICE = previousSpread;
+    globalThis.fetch = previousFetch;
+  }
+});

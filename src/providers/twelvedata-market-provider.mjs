@@ -27,6 +27,11 @@ function number(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function positive(value) {
+  const parsed = number(value);
+  return parsed != null && parsed > 0;
+}
+
 function apiKey() {
   return String(process.env.NEXORA_TWELVEDATA_API_KEY ?? '').trim();
 }
@@ -44,7 +49,7 @@ function providerSymbol(symbol) {
 }
 
 function parseTimestamp(value) {
-  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value * 1000);
+  if (typeof value === 'number' && Number.isFinite(value)) return new Date(value > 1_000_000_000_000 ? value : value * 1000);
   if (typeof value !== 'string' || !value.trim()) return null;
   const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value.trim()) ? value.trim() : value.trim() + 'Z';
   const timestamp = Date.parse(normalized);
@@ -81,6 +86,31 @@ function quoteFromResponse(body, symbol, now) {
   const observedAt = parseTimestamp(payload?.timestamp ?? payload?.datetime ?? payload?.last_quote_at) ?? now;
   const spread = configuredSpread();
   if (mid == null || mid <= 0 || spread == null) return null;
+  const half = spread / 2;
+  return {
+    symbol,
+    source: SOURCE,
+    bid: Number((mid - half).toFixed(8)),
+    ask: Number((mid + half).toFixed(8)),
+    last: mid,
+    observedAt: observedAt.toISOString(),
+  };
+}
+
+function swissquoteInstrument(symbol) {
+  const value = providerSymbol(symbol);
+  return value;
+}
+
+function quoteFromSwissquote(body, symbol, now) {
+  const rows = Array.isArray(body) ? body : [];
+  const prices = rows.flatMap((row) => Array.isArray(row?.spreadProfilePrices) ? row.spreadProfilePrices : []);
+  const selected = prices.find((item) => positive(item?.bid) && positive(item?.ask) && Number(item.ask) >= Number(item.bid));
+  if (!selected) return null;
+  const mid = (Number(selected.bid) + Number(selected.ask)) / 2;
+  const observedAt = parseTimestamp(rows.map((row) => row?.ts).find((value) => value != null)) ?? now;
+  const spread = configuredSpread();
+  if (!Number.isFinite(mid) || mid <= 0 || spread == null) return null;
   const half = spread / 2;
   return {
     symbol,
@@ -275,6 +305,21 @@ export class TwelveDataMarketDataProvider {
         }
       }
     }
+    const swissquoteUnresolved = missing.filter((symbol) => !quotes[symbol]);
+    for (const symbol of swissquoteUnresolved) {
+      try {
+        const url = `https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/${swissquoteInstrument(symbol)}`;
+        const response = await fetch(url, { method: 'GET', headers: { accept: 'application/json' }, signal });
+        if (!response.ok) throw errorWithCode('MARKET_DATA_FALLBACK_HTTP_ERROR');
+        const body = await response.json();
+        const quote = quoteFromSwissquote(body, symbol, now);
+        if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+        this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
+        quotes[symbol] = quote;
+      } catch (error) {
+        fallbackError = error;
+      }
+    }
     if (!quotes[PRIMARY_SYMBOL]) throw fallbackError ?? errorWithCode(configuredSpread() == null ? 'PAPER_SPREAD_NOT_CONFIGURED' : 'MARKET_DATA_QUOTE_INVALID');
     this.#recordSuccess();
     return quotes;
@@ -319,7 +364,7 @@ export class TwelveDataMarketDataProvider {
       } catch (error) {
         this.#recordFailure(error);
       }
-      if (Date.now() - this.#lastCandleCycleAt >= CANDLE_CYCLE_MS && Date.now() >= this.#marketDataRetryAt) {
+      if (Date.now() - this.#lastCandleCycleAt >= CANDLE_CYCLE_MS) {
         const timeframe = TIMEFRAME_NAMES[this.#candleCursor % TIMEFRAME_NAMES.length];
         this.#candleCursor += 1;
         this.#lastCandleCycleAt = Date.now();
