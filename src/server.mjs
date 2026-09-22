@@ -88,6 +88,14 @@ export function initializeDatabase(db, now = new Date()) {
   );
 }
 
+function establishTelemetryBaseline(db, now = new Date()) {
+  const previous = readState(db, 'workerTelemetryBaseline', null);
+  if (previous?.buildId === config.buildId && typeof previous.startedAt === 'string') return previous;
+  const baseline = { buildId: config.buildId, startedAt: now.toISOString() };
+  writeState(db, 'workerTelemetryBaseline', baseline, baseline.startedAt);
+  return baseline;
+}
+
 function latestBrokerHealth(db) {
   return db.prepare(`
     SELECT source, status, checked_at, details_json FROM broker_health ORDER BY id DESC LIMIT 1
@@ -203,7 +211,11 @@ function workerDependencySummary(rows, name) {
 
 function workerTelemetrySnapshot(db, now, window = '1h') {
   const windowMs = window === '24h' ? 24 * 60 * 60_000 : 60 * 60_000;
-  const from = new Date(now.getTime() - windowMs).toISOString();
+  const requestedFrom = now.getTime() - windowMs;
+  const baseline = readState(db, 'workerTelemetryBaseline', null);
+  const baselineAt = baseline?.buildId === config.buildId && typeof baseline.startedAt === 'string'
+    ? Date.parse(baseline.startedAt) : NaN;
+  const from = new Date(Math.max(requestedFrom, Number.isFinite(baselineAt) ? baselineAt : requestedFrom)).toISOString();
   const until = now.toISOString();
   const queried = db.prepare(`
     SELECT observed_at, duration_ms, error_class,
@@ -223,6 +235,7 @@ function workerTelemetrySnapshot(db, now, window = '1h') {
     window,
     from,
     until,
+    baselineStartedAt: Number.isFinite(baselineAt) ? new Date(baselineAt).toISOString() : null,
     latestSampleAt: rows[0]?.observed_at ?? null,
     sampleCount: rows.length,
     truncated,
@@ -1232,6 +1245,7 @@ function bootstrap() {
     try {
       db = openDatabase(config.dbPath, MIGRATIONS);
       initializeDatabase(db);
+      establishTelemetryBaseline(db);
       appendAudit(db, {
         eventType: 'SERVICE_STARTED',
         reason: 'Local paper-only service started; live execution capability is absent.',
