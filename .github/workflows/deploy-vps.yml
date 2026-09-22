@@ -193,14 +193,15 @@ jobs:
           test -n "$CONTROL_TOKEN"
           for attempt in $(seq 1 60); do
             if curl -fsS --max-time 3 http://127.0.0.1:18087/healthz | grep -q '"readiness":"ready"'; then
-              resume_response="$(curl -fsS --max-time 5 -X POST http://127.0.0.1:18087/api/actions/resume \
-                -H 'content-type: application/json' \
-                -H "authorization: Bearer $CONTROL_TOKEN" \
-                -H "idempotency-key: deploy-resume-$DEPLOY_SHA" \
-                -d '{}')"
-              printf '%s\n' "$resume_response" | grep -q '"entriesAllowed":true'
-              echo "NEXORA_PAPER_RESUMED commit=$DEPLOY_SHA"
-              exit 0
+              if resume_response="$(curl -fsS --max-time 5 -X POST http://127.0.0.1:18087/api/actions/resume \
+                  -H 'content-type: application/json' \
+                  -H "authorization: Bearer $CONTROL_TOKEN" \
+                  -H "idempotency-key: deploy-resume-$DEPLOY_SHA" \
+                  -d '{}')" \
+                && printf '%s\n' "$resume_response" | grep -q '"entriesAllowed":true'; then
+                echo "NEXORA_PAPER_RESUMED commit=$DEPLOY_SHA"
+                exit 0
+              fi
             fi
             sleep 2
           done
