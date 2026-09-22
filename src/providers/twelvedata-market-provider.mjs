@@ -220,7 +220,22 @@ export class TwelveDataMarketDataProvider {
   }
 
   async readMarketData(now = new Date(), { signal } = {}) {
-    if (Date.now() < this.#marketDataRetryAt) throw errorWithCode('MARKET_DATA_RATE_LIMITED');
+    if (Date.now() < this.#marketDataRetryAt) {
+      const cachedQuote = this.#quoteCache.get(PRIMARY_SYMBOL)?.value ?? null;
+      if (!cachedQuote) throw errorWithCode('MARKET_DATA_RATE_LIMITED');
+      return {
+        source: SOURCE,
+        symbols: this.symbols,
+        quote: cachedQuote,
+        candlesByTimeframe: {},
+        quotesBySymbol: { [PRIMARY_SYMBOL]: cachedQuote },
+        candlesBySymbol: { [PRIMARY_SYMBOL]: {} },
+        marketOverview: null,
+        marketOverviewBySymbol: {},
+        errors: [{ symbol: PRIMARY_SYMBOL, reason: 'MARKET_DATA_RATE_LIMITED' }],
+        paperSpread: { type: 'FIXED_AROUND_MID', price: configuredSpread() },
+      };
+    }
     const quotesBySymbol = {};
     const candlesBySymbol = {};
     const marketOverviewBySymbol = {};
