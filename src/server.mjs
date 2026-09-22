@@ -8,6 +8,7 @@ import { appendAudit, openDatabase, readState, runIdempotent, writeState } from 
 import { config } from './config.mjs';
 import { PaperWorker, UnavailableMarketDataProvider } from './worker.mjs';
 import { TwelveDataMarketDataProvider } from './providers/twelvedata-market-provider.mjs';
+import { ForexFactoryNewsCalendarProvider } from './providers/forexfactory-news-provider.mjs';
 import { isAcceptedMarketSource, isFreshMarketSnapshot, MARKET_QUOTE_MAX_AGE_MS } from './market-source.mjs';
 import { executePaperScan } from './services/paper-scan-service.mjs';
 import { atr, calculateIndicators, ema } from './domain/indicators.mjs';
@@ -101,6 +102,11 @@ function latestBrokerHealth(db) {
 function createMarketProvider() {
   if (config.marketProvider === 'twelvedata') return new TwelveDataMarketDataProvider();
   return new UnavailableMarketDataProvider();
+}
+
+function createNewsProvider() {
+  if (config.newsSource === 'forexfactory') return new ForexFactoryNewsCalendarProvider();
+  return undefined;
 }
 
 function parseJson(value, fallback = null) {
@@ -1231,7 +1237,12 @@ function bootstrap() {
         reason: 'Local paper-only service started; live execution capability is absent.',
         metadata: { buildId: config.buildId, schemaVersion: config.schemaVersion },
       });
-      worker = new PaperWorker({ db, provider: createMarketProvider(), symbols: config.symbols });
+      worker = new PaperWorker({
+        db,
+        provider: createMarketProvider(),
+        newsProvider: createNewsProvider(),
+        symbols: config.symbols,
+      });
       worker.start();
       initialized = true;
       const address = server.address();

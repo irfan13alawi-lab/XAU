@@ -65,6 +65,9 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           DEPLOY_SHA: ${{ github.sha }}
           NEXORA_TWELVEDATA_API_KEY: ${{ secrets.NEXORA_TWELVEDATA_API_KEY }}
+          NEXORA_TELEGRAM_BOT_TOKEN: ${{ secrets.NEXORA_TELEGRAM_BOT_TOKEN }}
+          NEXORA_TELEGRAM_ALLOWED_USER_IDS: ${{ secrets.NEXORA_TELEGRAM_ALLOWED_USER_IDS }}
+          NEXORA_TELEGRAM_ALLOWED_CHAT_IDS: ${{ secrets.NEXORA_TELEGRAM_ALLOWED_CHAT_IDS }}
         run: |
           set -euo pipefail
           test -n "$VPS_HOST"
@@ -115,7 +118,8 @@ jobs:
             mv "$tmp_file" "$APP_PATH/.env"
           }
           upsert_env NEXORA_MARKET_SOURCE twelvedata
-          upsert_env NEXORA_SYMBOLS XAUUSD
+          upsert_env NEXORA_NEWS_SOURCE forexfactory
+          upsert_env NEXORA_SYMBOLS XAUUSD,EURUSD,GBPUSD,USDJPY
           upsert_env NEXORA_PAPER_SPREAD_PRICE 0.20
           upsert_env NEXORA_PAPER_STARTING_EQUITY 10000
           upsert_env NEXORA_PAPER_CURRENCY USD
@@ -127,6 +131,17 @@ jobs:
             unset TWELVEDATA_API_KEY
           else
             sed -i '/^NEXORA_TWELVEDATA_API_KEY=/d' "$APP_PATH/.env"
+          fi
+          if [ -n "${NEXORA_TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${NEXORA_TELEGRAM_ALLOWED_USER_IDS:-}" ] && [ -n "${NEXORA_TELEGRAM_ALLOWED_CHAT_IDS:-}" ]; then
+            upsert_env NEXORA_TELEGRAM_ENABLED true
+            upsert_env NEXORA_TELEGRAM_NOTIFICATIONS_ENABLED true
+            upsert_env NEXORA_TELEGRAM_BOT_TOKEN "$NEXORA_TELEGRAM_BOT_TOKEN"
+            upsert_env NEXORA_TELEGRAM_ALLOWED_USER_IDS "$NEXORA_TELEGRAM_ALLOWED_USER_IDS"
+            upsert_env NEXORA_TELEGRAM_ALLOWED_CHAT_IDS "$NEXORA_TELEGRAM_ALLOWED_CHAT_IDS"
+          else
+            upsert_env NEXORA_TELEGRAM_ENABLED false
+            upsert_env NEXORA_TELEGRAM_NOTIFICATIONS_ENABLED false
+            sed -i '/^NEXORA_TELEGRAM_BOT_TOKEN=/d;/^NEXORA_TELEGRAM_ALLOWED_USER_IDS=/d;/^NEXORA_TELEGRAM_ALLOWED_CHAT_IDS=/d' "$APP_PATH/.env"
           fi
           chmod 600 "$APP_PATH/.env"
 

@@ -15,6 +15,8 @@ const QUOTE_CACHE_MS = 60_000;
 const CANDLE_CACHE_MS = 5 * 60_000;
 const CANDLE_COUNT = 300;
 const DAY_MS = 24 * 60 * 60_000;
+const CANDLE_CYCLE_MS = 60_000;
+const TIMEFRAME_NAMES = Object.freeze(Object.keys(TIMEFRAMES));
 
 function number(value) {
   const parsed = Number(value);
@@ -83,6 +85,16 @@ function quoteFromResponse(body, symbol, now) {
     last: mid,
     observedAt: observedAt.toISOString(),
   };
+}
+
+function responseForSymbol(body, symbol, symbolCount) {
+  const key = providerSymbol(symbol);
+  const candidates = [body?.[key], body?.[symbol], body?.data?.[key], body?.data?.[symbol]];
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) return candidate;
+  }
+  if (symbolCount === 1 && body && typeof body === 'object' && !Array.isArray(body)) return body;
+  return null;
 }
 
 function candlesFromResponse(body, symbol, timeframe, now) {
@@ -161,95 +173,132 @@ export class TwelveDataMarketDataProvider {
   #quoteCache = new Map();
   #candleCache = new Map();
   #marketDataRetryAt = 0;
+  #lastErrorCode = null;
+  #failureCount = 0;
+  #lastCandleCycleAt = 0;
+  #candleCursor = 0;
 
   constructor({ symbols = config.symbols } = {}) {
     const normalized = [...new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()))];
     this.symbols = Object.freeze(normalized.includes(PRIMARY_SYMBOL) ? normalized : [PRIMARY_SYMBOL, ...normalized]);
   }
 
-  async #readQuote(symbol, now, signal) {
-    const key = apiKey();
-    if (!key) throw errorWithCode('TWELVEDATA_API_KEY_MISSING');
-    const cached = this.#quoteCache.get(symbol);
-    if (cached && Date.now() - cached.fetchedAt < QUOTE_CACHE_MS) return cached.value;
-    // currency_conversion supports commodity pairs such as XAU/USD and
-    // returns a current rate plus provider timestamp for freshness checks.
-    const url = new URL('https://api.twelvedata.com/currency_conversion');
-    url.search = new URLSearchParams({ symbol: providerSymbol(symbol), amount: '1', apikey: key, timezone: 'UTC' }).toString();
-    const quote = quoteFromResponse(await getJson(url, signal), symbol, now);
-    if (!quote) throw errorWithCode(configuredSpread() == null ? 'PAPER_SPREAD_NOT_CONFIGURED' : 'MARKET_DATA_QUOTE_INVALID');
-    this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
-    return quote;
+  #recordFailure(error) {
+    const code = error?.code ?? 'MARKET_DATA_PROVIDER_ERROR';
+    this.#lastErrorCode = code;
+    this.#failureCount = Math.min(this.#failureCount + 1, 6);
+    const delay = code === 'MARKET_DATA_RATE_LIMITED'
+      ? 60_000
+      : Math.min(60_000, 5_000 * (2 ** (this.#failureCount - 1)));
+    this.#marketDataRetryAt = Date.now() + delay;
   }
 
-  async #readCandles(symbol, now, signal) {
-    const cached = this.#candleCache.get(symbol);
-    if (cached && Date.now() - cached.fetchedAt < CANDLE_CACHE_MS) return cached.value;
+  #recordSuccess() {
+    this.#failureCount = 0;
+    this.#lastErrorCode = null;
+    this.#marketDataRetryAt = 0;
+  }
+
+  #cachedQuotes(now) {
+    const quotes = {};
+    for (const symbol of this.symbols) {
+      const cached = this.#quoteCache.get(symbol);
+      if (cached && Date.now() - cached.fetchedAt < QUOTE_CACHE_MS) quotes[symbol] = cached.value;
+    }
+    return quotes;
+  }
+
+  async #readQuotes(now, signal) {
     const key = apiKey();
     if (!key) throw errorWithCode('TWELVEDATA_API_KEY_MISSING');
-    const result = {};
-    for (const [timeframe, [interval]] of Object.entries(TIMEFRAMES)) {
-      const url = new URL('https://api.twelvedata.com/time_series');
-      url.search = new URLSearchParams({ symbol: providerSymbol(symbol), interval, outputsize: String(CANDLE_COUNT), timezone: 'UTC', apikey: key }).toString();
-      try {
-        result[timeframe] = candlesFromResponse(await getJson(url, signal), symbol, timeframe, now);
-      } catch (error) {
-        if (error?.code === 'MARKET_DATA_RATE_LIMITED') {
-          this.#marketDataRetryAt = Date.now() + 60_000;
-          break;
-        }
-        // Keep any timeframes that were already accepted. Paper execution
-        // still requires complete MTF data, but the dashboard can show a
-        // verified quote and partial candle coverage during provider limits.
+    const cachedQuotes = this.#cachedQuotes(now);
+    const missing = this.symbols.filter((symbol) => !cachedQuotes[symbol]);
+    if (!missing.length || Date.now() < this.#marketDataRetryAt) return cachedQuotes;
+    // Twelve Data accepts comma-separated symbols on currency_conversion. One
+    // batched request keeps the four-symbol watchlist within the provider's
+    // per-minute budget while preserving one normalized quote per symbol.
+    const url = new URL('https://api.twelvedata.com/currency_conversion');
+    url.search = new URLSearchParams({ symbol: missing.map(providerSymbol).join(','), amount: '1', apikey: key, timezone: 'UTC' }).toString();
+    const body = await getJson(url, signal);
+    const quotes = { ...cachedQuotes };
+    for (const symbol of missing) {
+      const quote = quoteFromResponse(responseForSymbol(body, symbol, missing.length), symbol, now);
+      if (quote) {
+        this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
+        quotes[symbol] = quote;
       }
     }
-    if (Object.keys(result).length > 0) this.#candleCache.set(symbol, { value: result, fetchedAt: Date.now() });
-    return result;
+    if (!quotes[PRIMARY_SYMBOL]) throw errorWithCode(configuredSpread() == null ? 'PAPER_SPREAD_NOT_CONFIGURED' : 'MARKET_DATA_QUOTE_INVALID');
+    this.#recordSuccess();
+    return quotes;
+  }
+
+  async #readCandleBatch(timeframe, now, signal) {
+    const key = apiKey();
+    if (!key) throw errorWithCode('TWELVEDATA_API_KEY_MISSING');
+    const definition = TIMEFRAMES[timeframe];
+    if (!definition) return;
+    const url = new URL('https://api.twelvedata.com/time_series');
+    url.search = new URLSearchParams({
+      symbol: this.symbols.map(providerSymbol).join(','),
+      interval: definition[0],
+      outputsize: String(CANDLE_COUNT),
+      timezone: 'UTC',
+      apikey: key,
+    }).toString();
+    const body = await getJson(url, signal);
+    for (const symbol of this.symbols) {
+      const response = responseForSymbol(body, symbol, this.symbols.length);
+      const candles = candlesFromResponse(response, symbol, timeframe, now);
+      if (!this.#candleCache.has(symbol)) this.#candleCache.set(symbol, new Map());
+      if (candles.length) this.#candleCache.get(symbol).set(timeframe, { value: candles, fetchedAt: Date.now() });
+    }
+    this.#recordSuccess();
   }
 
   async readHealth(now = new Date(), { signal } = {}) {
     if (!apiKey()) return { source: SOURCE, status: 'OFFLINE', checkedAt: now.toISOString(), reason: 'TWELVEDATA_API_KEY_MISSING' };
     if (configuredSpread() == null) return { source: SOURCE, status: 'OFFLINE', checkedAt: now.toISOString(), reason: 'PAPER_SPREAD_NOT_CONFIGURED' };
     try {
-      const quote = await this.#readQuote(PRIMARY_SYMBOL, now, signal);
+      const quote = (await this.#readQuotes(now, signal))[PRIMARY_SYMBOL];
+      if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
       const ageMs = now.getTime() - Date.parse(quote.observedAt);
       return { source: SOURCE, status: ageMs >= 0 && ageMs <= MARKET_QUOTE_MAX_AGE_MS ? 'HEALTHY' : 'STALE', checkedAt: now.toISOString(), reason: ageMs <= MARKET_QUOTE_MAX_AGE_MS ? null : 'MARKET_DATA_QUOTE_STALE' };
     } catch (error) {
+      this.#recordFailure(error);
       return { source: SOURCE, status: 'OFFLINE', checkedAt: now.toISOString(), reason: /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code ?? '') ? error.code : 'MARKET_DATA_PROVIDER_ERROR' };
     }
   }
 
   async readMarketData(now = new Date(), { signal } = {}) {
-    if (Date.now() < this.#marketDataRetryAt) {
-      const cachedQuote = this.#quoteCache.get(PRIMARY_SYMBOL)?.value ?? null;
-      if (!cachedQuote) throw errorWithCode('MARKET_DATA_RATE_LIMITED');
-      return {
-        source: SOURCE,
-        symbols: this.symbols,
-        quote: cachedQuote,
-        candlesByTimeframe: {},
-        quotesBySymbol: { [PRIMARY_SYMBOL]: cachedQuote },
-        candlesBySymbol: { [PRIMARY_SYMBOL]: {} },
-        marketOverview: null,
-        marketOverviewBySymbol: {},
-        errors: [{ symbol: PRIMARY_SYMBOL, reason: 'MARKET_DATA_RATE_LIMITED' }],
-        paperSpread: { type: 'FIXED_AROUND_MID', price: configuredSpread() },
-      };
-    }
-    const quotesBySymbol = {};
-    const candlesBySymbol = {};
-    const marketOverviewBySymbol = {};
+    let quotesBySymbol;
     const errors = [];
-    for (const symbol of this.symbols) {
+    try {
+      quotesBySymbol = await this.#readQuotes(now, signal);
+    } catch (error) {
+      this.#recordFailure(error);
+      throw error;
+    }
+    if (Date.now() - this.#lastCandleCycleAt >= CANDLE_CYCLE_MS && Date.now() >= this.#marketDataRetryAt) {
+      const timeframe = TIMEFRAME_NAMES[this.#candleCursor % TIMEFRAME_NAMES.length];
+      this.#candleCursor += 1;
+      this.#lastCandleCycleAt = Date.now();
       try {
-        quotesBySymbol[symbol] = await this.#readQuote(symbol, now, signal);
-        candlesBySymbol[symbol] = await this.#readCandles(symbol, now, signal);
-        marketOverviewBySymbol[symbol] = marketOverviewFromCandles(symbol, quotesBySymbol[symbol], candlesBySymbol[symbol], now);
+        await this.#readCandleBatch(timeframe, now, signal);
       } catch (error) {
-        if (symbol === PRIMARY_SYMBOL) throw error;
-        errors.push({ symbol, reason: /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code ?? '') ? error.code : 'MARKET_DATA_PROVIDER_ERROR' });
+        this.#recordFailure(error);
+        errors.push({ symbol: PRIMARY_SYMBOL, reason: /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code ?? '') ? error.code : 'MARKET_DATA_PROVIDER_ERROR' });
       }
     }
+    const candlesBySymbol = {};
+    const marketOverviewBySymbol = {};
+    for (const symbol of this.symbols) {
+      const cache = this.#candleCache.get(symbol) ?? new Map();
+      candlesBySymbol[symbol] = Object.fromEntries([...cache.entries()].map(([timeframe, item]) => [timeframe, item.value]));
+      if (!quotesBySymbol[symbol]) errors.push({ symbol, reason: this.#lastErrorCode ?? 'MARKET_DATA_QUOTE_UNAVAILABLE' });
+      if (quotesBySymbol[symbol]) marketOverviewBySymbol[symbol] = marketOverviewFromCandles(symbol, quotesBySymbol[symbol], candlesBySymbol[symbol], now);
+    }
+    if (!quotesBySymbol[PRIMARY_SYMBOL]) throw errorWithCode(this.#lastErrorCode ?? 'MARKET_DATA_QUOTE_UNAVAILABLE');
     return {
       source: SOURCE,
       symbols: this.symbols,

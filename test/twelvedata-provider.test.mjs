@@ -55,3 +55,39 @@ test('Twelve Data adapter returns a VPS-safe XAU market contract with spot deriv
     globalThis.fetch = previousFetch;
   }
 });
+
+test('Twelve Data adapter batches the four-symbol watchlist and advances one candle timeframe per cycle', async () => {
+  const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
+  const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
+  const previousFetch = globalThis.fetch;
+  process.env.NEXORA_TWELVEDATA_API_KEY = 'test-key-not-a-credential';
+  process.env.NEXORA_PAPER_SPREAD_PRICE = '0.20';
+  const now = new Date('2026-09-22T00:00:00.000Z');
+  const symbols = ['XAU/USD', 'EUR/USD', 'GBP/USD', 'USD/JPY'];
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.pathname.endsWith('/currency_conversion')) {
+      return new Response(JSON.stringify(Object.fromEntries(symbols.map((symbol, index) => [symbol, {
+        rate: String(2000 + index), timestamp: Math.floor(now.getTime() / 1000),
+      }]))), { status: 200 });
+    }
+    const values = candleRows(now, 15, 120);
+    return new Response(JSON.stringify(Object.fromEntries(symbols.map((symbol) => [symbol, { values }]))), { status: 200 });
+  };
+  try {
+    const { TwelveDataMarketDataProvider } = await import('../src/providers/twelvedata-market-provider.mjs');
+    const provider = new TwelveDataMarketDataProvider({ symbols: ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY'] });
+    const payload = await provider.readMarketData(now);
+    assert.deepEqual(Object.keys(payload.quotesBySymbol).sort(), ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD']);
+    assert.deepEqual(Object.keys(payload.candlesBySymbol).sort(), ['EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD']);
+    for (const symbol of ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY']) {
+      assert.equal(payload.candlesBySymbol[symbol].M15.length, 120);
+    }
+  } finally {
+    if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
+    else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
+    if (previousSpread === undefined) delete process.env.NEXORA_PAPER_SPREAD_PRICE;
+    else process.env.NEXORA_PAPER_SPREAD_PRICE = previousSpread;
+    globalThis.fetch = previousFetch;
+  }
+});

@@ -175,6 +175,7 @@ export const config = Object.freeze({
   brokerName: safeProviderLabel(process.env.NEXORA_BROKER ?? 'none'),
   marketSource: safeProviderLabel(process.env.NEXORA_MARKET_SOURCE ?? 'none'),
   marketProvider: safeProviderLabel(process.env.NEXORA_MARKET_SOURCE ?? 'none').toLowerCase(),
+  newsSource: safeProviderLabel(process.env.NEXORA_NEWS_SOURCE ?? 'none').toLowerCase(),
   operatorToken: operatorToken || null,
   telegram: Object.freeze({
     enabled: telegramEnabled,
