@@ -82,9 +82,6 @@ if (telegramEnabled) {
   if (!telegramAllowedUserIds.length || !telegramAllowedChatIds.length) {
     throw new Error('Telegram requires both user-ID and chat-ID allowlists; no ID values are logged.');
   }
-  if (!operatorToken) {
-    throw new Error('Telegram controls require NEXORA_CONTROL_TOKEN to be configured.');
-  }
 }
 if (telegramNotificationsEnabled && !telegramEnabled) {
   throw new Error('Telegram notifications require NEXORA_TELEGRAM_ENABLED=true.');

@@ -514,22 +514,31 @@ test('operator token gates mutations and is never returned by the dashboard', as
   assert.equal(JSON.stringify(body).includes(CONTROL_TOKEN), false);
 });
 
-test('mutations fail closed when no operator token is configured', async () => {
-  const readOnlyServer = createNexoraServer({ db, clock: () => new Date('2026-09-21T00:00:00.000Z'), operatorToken: null });
-  await new Promise((resolve) => readOnlyServer.listen(0, '127.0.0.1', resolve));
-  const readOnlyOrigin = `http://127.0.0.1:${readOnlyServer.address().port}`;
+test('mutations work without a token when tokenless operator mode is selected', async () => {
+  const tokenlessDb = openDatabase(':memory:', fileURLToPath(new URL('../src/migrations/', import.meta.url)));
+  initializeDatabase(tokenlessDb, new Date('2026-09-21T00:00:00.000Z'));
+  const tokenlessServer = createNexoraServer({ db: tokenlessDb, clock: () => new Date('2026-09-21T00:00:00.000Z'), operatorToken: null });
+  await new Promise((resolve) => tokenlessServer.listen(0, '127.0.0.1', resolve));
+  const tokenlessOrigin = `http://127.0.0.1:${tokenlessServer.address().port}`;
   try {
-    const health = await fetch(`${readOnlyOrigin}/healthz`);
-    assert.equal((await health.json()).controlActionsAvailable, false);
-    const response = await fetch(`${readOnlyOrigin}/api/actions/pause`, {
+    const health = await fetch(`${tokenlessOrigin}/healthz`);
+    const healthBody = await health.json();
+    assert.equal(healthBody.controlActionsAvailable, true);
+    assert.equal(healthBody.controlAuthRequired, false);
+    const dashboard = await fetch(`${tokenlessOrigin}/api/dashboard`);
+    const dashboardBody = await dashboard.json();
+    assert.equal(dashboardBody.control.authConfigured, false);
+    assert.equal(dashboardBody.control.operatorAuthenticated, true);
+    const response = await fetch(`${tokenlessOrigin}/api/actions/pause`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'idempotency-key': 'auth-unconfigured-0001', origin: readOnlyOrigin },
+      headers: { 'content-type': 'application/json', 'idempotency-key': 'auth-tokenless-0001', origin: tokenlessOrigin },
       body: '{}',
     });
-    assert.equal(response.status, 503);
-    assert.equal((await response.json()).error, 'CONTROL_AUTH_NOT_CONFIGURED');
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).ok, true);
   } finally {
-    await new Promise((resolve, reject) => readOnlyServer.close((error) => error ? reject(error) : resolve()));
+    await new Promise((resolve, reject) => tokenlessServer.close((error) => error ? reject(error) : resolve()));
+    tokenlessDb.close();
   }
 });
 

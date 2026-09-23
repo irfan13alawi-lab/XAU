@@ -666,13 +666,18 @@
     setText('#scanStatus', data.lastScan ? `${data.lastScan.status} · ${timeOf(data.lastScan.completed_at)}` : 'Waiting for verified data');
     setText('#pendingSetups', counts.pendingOrders ?? 0);
     setText('#pendingCount', `${counts.pendingOrders ?? 0} pending orders`);
-    setText('#operatorAuthStatus', control.operatorAuthenticated ? 'UNLOCKED · MEMORY ONLY'
-      : control.authConfigured ? 'LOCKED · ENTER LOCAL TOKEN' : 'SET NEXORA_CONTROL_TOKEN IN .env');
+    setText('#operatorAuthStatus', control.authConfigured
+      ? control.operatorAuthenticated ? 'UNLOCKED · MEMORY ONLY' : 'LOCKED · ENTER LOCAL TOKEN'
+      : 'CONTROLS ENABLED · TOKEN DISABLED');
     const operatorInput = $('#operatorToken');
     const operatorButton = $('#operatorAuthButton');
-    if (operatorInput) operatorInput.disabled = !control.authConfigured;
+    if (operatorInput) {
+      operatorInput.disabled = !control.authConfigured;
+      operatorInput.hidden = !control.authConfigured;
+    }
     if (operatorButton) {
       operatorButton.disabled = !control.authConfigured;
+      operatorButton.hidden = !control.authConfigured;
       operatorButton.textContent = control.operatorAuthenticated ? 'Lock controls' : 'Unlock controls';
     }
     const paperButton = $('#paperModeButton');

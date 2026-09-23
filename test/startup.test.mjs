@@ -134,7 +134,8 @@ test('successful bind initializes the database and then serves paper-only health
     assert.equal(health.liveness, 'ok');
     assert.equal(health.schemaVersion, 10);
     assert.equal(health.readiness, 'not_ready');
-    assert.equal(health.controlActionsAvailable, false);
+    assert.equal(health.controlActionsAvailable, true);
+    assert.equal(health.controlAuthRequired, false);
     const exited = once(child, 'exit');
     child.kill('SIGKILL');
     const [code] = await exited;

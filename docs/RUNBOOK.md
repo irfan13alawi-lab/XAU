@@ -6,9 +6,9 @@ This runbook is for the local paper-only prototype. It does not authorize live t
 
 The dashboard refreshes read-only status every 15 seconds. Each API request has an 8-second deadline; if one stalls, the page reports a timeout and releases its refresh lock so a later cycle can retry. A normal page refresh does not trigger a scan. A timeout does not prove that a state-changing action was not accepted; check the resulting state before repeating a consequential action.
 
-1. Copy `.env.example` to `.env` if needed. Set `NEXORA_CONTROL_TOKEN` to a newly generated random secret of at least 32 characters using a local secret manager; do not paste it into chat or commit `.env`. Leaving it blank intentionally keeps the dashboard read-only.
+1. Copy `.env.example` to `.env` if needed. Leave `NEXORA_CONTROL_TOKEN` blank for tokenless operator mode, or set it to a newly generated random secret of at least 32 characters using a local secret manager for a public deployment. Do not paste it into chat or commit `.env`.
 2. In PowerShell at the project directory, run `npm start`.
-3. Open `http://127.0.0.1:18765` and enter the configured token in the local operator-control field. It is kept in page memory only; re-enter it after reload.
+3. Open `http://127.0.0.1:18765`. In tokenless mode, controls are immediately available; when a token is configured, enter it in the local operator-control field. A configured token is kept in page memory only and must be re-entered after reload.
 4. Check `http://127.0.0.1:18765/healthz`, `/api/dashboard`, and `/api/telemetry/worker?window=1h`. `worker.lastTick` gives the most recent cycle; the telemetry endpoint aggregates persisted cycle/dependency latency and failures for 1h or 24h. `attempted: false` means a dependency was skipped or served from cache, so it is excluded from that dependency's latency percentile. Metrics are local diagnostics retained for at most seven days/60,000 samples; they are not external tracing, broker fill latency, or strategy evidence.
 5. Confirm `liveTradingEnabled` is false and the UI accurately shows broker/data unavailable when no provider is configured.
 
@@ -16,7 +16,7 @@ Each HTTP response includes an `X-Request-ID`. Local request logs are JSON lines
 
 `liveness: ok` means the process responds. `readiness: not_ready` is expected without a selected and healthy market provider. Never infer trading readiness from process liveness or a green UI alone.
 
-Every mutating API endpoint requires same-origin plus the configured bearer token and an idempotency key. Without an environment-injected token, state changes return `503 CONTROL_AUTH_NOT_CONFIGURED`; wrong/missing tokens return `401 CONTROL_AUTH_REQUIRED`. Read-only status routes remain accessible on loopback. The dashboard never persists the token and does not send it to any third-party host.
+Every mutating API endpoint requires same-origin plus an idempotency key. Bearer-token authentication is optional when `NEXORA_CONTROL_TOKEN` is blank and enforced when it is configured. The dashboard never persists a configured token and does not send it to any third-party host.
 
 ## Optional Windows auto-start
 
@@ -28,7 +28,7 @@ Paper mode controls are deliberately separate from pause/resume. Turning paper m
 
 ## Optional Telegram command bridge
 
-The Telegram bridge is disabled by default. Enabling it creates an outbound long-poll connection to Telegram, so do not set NEXORA_TELEGRAM_ENABLED=true until that external connection is explicitly approved. Keep the bot token in the local ignored .env/secret store only; never paste it into the dashboard, chat, source control, or logs. Set NEXORA_CONTROL_TOKEN, NEXORA_TELEGRAM_BOT_TOKEN, NEXORA_TELEGRAM_ALLOWED_USER_IDS, and NEXORA_TELEGRAM_ALLOWED_CHAT_IDS. Both allowlists are required and both the sender user ID and destination chat ID must match. Command replies use a local durable outbox even when event notifications are off. Restart the local service after changing environment values.
+The Telegram bridge is disabled by default. Enabling it creates an outbound long-poll connection to Telegram, so do not set NEXORA_TELEGRAM_ENABLED=true until that external connection is explicitly approved. Keep the bot token in the local ignored .env/secret store only; never paste it into the dashboard, chat, source control, or logs. Set NEXORA_TELEGRAM_BOT_TOKEN, NEXORA_TELEGRAM_ALLOWED_USER_IDS, and NEXORA_TELEGRAM_ALLOWED_CHAT_IDS; `NEXORA_CONTROL_TOKEN` remains optional. Both allowlists are required and both the sender user ID and destination chat ID must match. Command replies use a local durable outbox even when event notifications are off. Restart the local service after changing environment values.
 
 Supported commands are /status, /positions, /pending, /stats, /lastscan, /pause, /resume, /paper on|off, /scan, and /research <dataset.json>. Every mutating command is sent through the existing authenticated local API with an update-derived idempotency key; resume remains subject to all normal fail-closed readiness checks. There is no live-trading command or route. /research accepts only the same bounded local dataset filename as the dashboard. Telegram state exposes only enabled/configured flags, status, timestamps, and reason codes—never the token or allowlist IDs.
 

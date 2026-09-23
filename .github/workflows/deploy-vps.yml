@@ -65,7 +65,6 @@ jobs:
           VPS_USER: ${{ secrets.VPS_USER }}
           DEPLOY_SHA: ${{ github.sha }}
           NEXORA_TWELVEDATA_API_KEY: ${{ secrets.NEXORA_TWELVEDATA_API_KEY }}
-          NEXORA_CONTROL_TOKEN: ${{ secrets.NEXORA_CONTROL_TOKEN }}
           NEXORA_TELEGRAM_BOT_TOKEN: ${{ secrets.NEXORA_TELEGRAM_BOT_TOKEN }}
           NEXORA_TELEGRAM_ALLOWED_USER_IDS: ${{ secrets.NEXORA_TELEGRAM_ALLOWED_USER_IDS }}
           NEXORA_TELEGRAM_ALLOWED_CHAT_IDS: ${{ secrets.NEXORA_TELEGRAM_ALLOWED_CHAT_IDS }}
@@ -83,13 +82,6 @@ jobs:
               "$VPS_USER@$VPS_HOST" \
               'umask 077; install -d -m 700 /opt/nexora-xau; cat > /opt/nexora-xau/.nexora_twelvedata_api_key'
           fi
-          if [ -n "${NEXORA_CONTROL_TOKEN:-}" ]; then
-            printf '%s' "$NEXORA_CONTROL_TOKEN" | ssh -i "$HOME/.ssh/nexora_deploy" \
-              -o IdentitiesOnly=yes \
-              -o BatchMode=yes \
-              "$VPS_USER@$VPS_HOST" \
-              'umask 077; install -d -m 700 /opt/nexora-xau; cat > /opt/nexora-xau/.nexora_control_token'
-          fi
           ssh -i "$HOME/.ssh/nexora_deploy" \
             -o IdentitiesOnly=yes \
             -o BatchMode=yes \
@@ -98,7 +90,7 @@ jobs:
           set -euo pipefail
           APP_PATH=/opt/nexora-xau
           CONTAINER_NAME=nexora-xau
-          trap 'rm -f "$APP_PATH/.nexora_twelvedata_api_key" "$APP_PATH/.nexora_control_token"' EXIT
+          trap 'rm -f "$APP_PATH/.nexora_twelvedata_api_key"' EXIT
 
           test -d "$APP_PATH/.git"
           git -C "$APP_PATH" fetch --prune origin main
@@ -141,13 +133,10 @@ jobs:
           else
             sed -i '/^NEXORA_TWELVEDATA_API_KEY=/d' "$APP_PATH/.env"
           fi
-          if [ -s "$APP_PATH/.nexora_control_token" ]; then
-            CONTROL_TOKEN="$(cat "$APP_PATH/.nexora_control_token")"
-            upsert_env NEXORA_CONTROL_TOKEN "$CONTROL_TOKEN"
-            unset CONTROL_TOKEN
-          else
-            sed -i '/^NEXORA_CONTROL_TOKEN=/d' "$APP_PATH/.env"
-          fi
+          # The dashboard is intentionally running without a control-token
+          # prompt. Same-origin and idempotency protections remain enabled;
+          # paper/live safety gates are unchanged.
+          sed -i '/^NEXORA_CONTROL_TOKEN=/d' "$APP_PATH/.env"
           if [ -n "${NEXORA_TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${NEXORA_TELEGRAM_ALLOWED_USER_IDS:-}" ] && [ -n "${NEXORA_TELEGRAM_ALLOWED_CHAT_IDS:-}" ]; then
             upsert_env NEXORA_TELEGRAM_ENABLED true
             upsert_env NEXORA_TELEGRAM_NOTIFICATIONS_ENABLED true
@@ -189,13 +178,10 @@ jobs:
             exit 1
           fi
 
-          CONTROL_TOKEN="$(sed -n 's/^NEXORA_CONTROL_TOKEN=//p' "$APP_PATH/.env")"
-          test -n "$CONTROL_TOKEN"
           for attempt in $(seq 1 60); do
             if curl -fsS --max-time 3 http://127.0.0.1:18087/healthz | grep -q '"readiness":"ready"'; then
               if curl -fsS --max-time 5 -X POST http://127.0.0.1:18087/api/actions/resume \
                   -H 'content-type: application/json' \
-                  -H "authorization: Bearer $CONTROL_TOKEN" \
                   -H "idempotency-key: deploy-resume-$DEPLOY_SHA" \
                   -d '{}' >/dev/null; then
                 echo "NEXORA_PAPER_RESUMED commit=$DEPLOY_SHA"

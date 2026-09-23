@@ -813,7 +813,11 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
           dataFreshness: snapshot.market.dataFreshness,
           buildId: config.buildId,
           schemaVersion: config.schemaVersion,
-          controlActionsAvailable: Boolean(controlToken),
+          // A control token is optional by design. When it is not configured,
+          // same-origin requests remain available for the operator dashboard.
+          // If a token is configured, mutation routes still require it.
+          controlActionsAvailable: true,
+          controlAuthRequired: Boolean(controlToken),
         });
       }
 
@@ -821,7 +825,7 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
         const body = dashboardSnapshot(db, now);
         body.control = {
           authConfigured: Boolean(controlToken),
-          operatorAuthenticated: requestHasValidControlToken(req, controlToken),
+          operatorAuthenticated: !controlToken || requestHasValidControlToken(req, controlToken),
         };
         return jsonResponse(res, 200, url.pathname === '/bot/status' ? body.trading : body);
       }
@@ -891,8 +895,9 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
 
       if (method !== 'GET' && method !== 'HEAD') {
         if (!requestIsSameOrigin(req)) return jsonResponse(res, 403, { error: 'Cross-origin state changes are blocked.' });
-        if (!controlToken) return jsonResponse(res, 503, { error: 'CONTROL_AUTH_NOT_CONFIGURED' });
-        if (!requestHasValidControlToken(req, controlToken)) return jsonResponse(res, 401, { error: 'CONTROL_AUTH_REQUIRED' });
+        if (controlToken && !requestHasValidControlToken(req, controlToken)) {
+          return jsonResponse(res, 401, { error: 'CONTROL_AUTH_REQUIRED' });
+        }
         return await handleAction(req, res, url.pathname, db, now, { researchRunner, researchInFlight, httpRequestId: requestId });
       }
       if (method === 'HEAD') {
