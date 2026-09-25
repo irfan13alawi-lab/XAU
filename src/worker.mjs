@@ -24,6 +24,7 @@ const TELEMETRY_ERROR_CLASSES = new Set([
   'BROKER_REJECTED', 'RATE_LIMITED', 'TYPE_ERROR', 'UNCLASSIFIED',
 ]);
 const MARKET_SNAPSHOT_REFRESH_MS = 2 * 60_000;
+const SCAN_PROBE_INTERVAL_MS = 30_000;
 
 function elapsedMilliseconds(start, end) {
   const elapsed = Number(end) - Number(start);
@@ -120,9 +121,9 @@ function round(value, places = 8) {
   return Number(Number(value).toFixed(places));
 }
 
-function persistPaperRiskState(db, now = new Date()) {
+function persistPaperRiskState(db, now = new Date(), snapshotOverride = undefined) {
   if (config.paperStartingEquity == null) return null;
-  const snapshot = latestPaperEquitySnapshot(db);
+  const snapshot = snapshotOverride === undefined ? latestPaperEquitySnapshot(db) : snapshotOverride;
   if (!snapshot || !positive(snapshot.equity) || !/^[A-Z]{3,8}$/.test(String(snapshot.currency ?? ''))) {
     writeState(db, 'riskMetrics', {
       equity: null,
@@ -516,6 +517,7 @@ export class PaperWorker {
   #telemetryTicksSincePrune = 0;
   #marketDataStateCache = new Map();
   #marketSnapshotCache = new Map();
+  #lastScanProbeAt = null;
 
   constructor({
     db,
@@ -671,15 +673,20 @@ export class PaperWorker {
         status: newsResult.attempted ? news.status : 'CACHED',
       };
       const scans = [];
+      const scanProbeDue = this.#lastScanProbeAt == null
+        || now.getTime() - this.#lastScanProbeAt >= SCAN_PROBE_INTERVAL_MS;
       const scanStartedAt = performance.now();
-      for (const symbol of this.tradeSymbols) {
-        const closeAt = freshClosedM15(this.db, now, symbol);
-        const scanStateKey = symbol === 'XAUUSD' ? 'lastWorkerM15Close' : `lastWorkerM15Close:${symbol}`;
-        const lastScanClose = readState(this.db, scanStateKey, null);
-        if (closeAt && closeAt !== lastScanClose) {
-          const evaluated = executePaperScan(this.db, now, { symbol });
-          writeState(this.db, scanStateKey, closeAt, now.toISOString());
-          scans.push({ symbol, scanId: evaluated.persisted.scanId, status: evaluated.persisted.status, replayed: evaluated.persisted.replayed, reasons: evaluated.persisted.reasons });
+      if (scanProbeDue) {
+        this.#lastScanProbeAt = now.getTime();
+        for (const symbol of this.tradeSymbols) {
+          const closeAt = freshClosedM15(this.db, now, symbol);
+          const scanStateKey = symbol === 'XAUUSD' ? 'lastWorkerM15Close' : `lastWorkerM15Close:${symbol}`;
+          const lastScanClose = readState(this.db, scanStateKey, null);
+          if (closeAt && closeAt !== lastScanClose) {
+            const evaluated = executePaperScan(this.db, now, { symbol });
+            writeState(this.db, scanStateKey, closeAt, now.toISOString());
+            scans.push({ symbol, scanId: evaluated.persisted.scanId, status: evaluated.persisted.status, replayed: evaluated.persisted.replayed, reasons: evaluated.persisted.reasons });
+          }
         }
       }
       stages.scanMs = elapsedMilliseconds(scanStartedAt, performance.now());
@@ -706,8 +713,8 @@ export class PaperWorker {
       }
       stages.executionMs = elapsedMilliseconds(executionStartedAt, performance.now());
       const accountingStartedAt = performance.now();
-      capturePaperEquitySnapshot(this.db, now);
-      if (readState(this.db, 'paperMode', config.paperMode) === true) persistPaperRiskState(this.db, now);
+      const paperEquitySnapshot = capturePaperEquitySnapshot(this.db, now);
+      if (readState(this.db, 'paperMode', config.paperMode) === true) persistPaperRiskState(this.db, now, paperEquitySnapshot);
       stages.accountingMs = elapsedMilliseconds(accountingStartedAt, performance.now());
       const telemetry = {
         durationMs: elapsedMilliseconds(tickStartedAt, this.monotonicNow()),
