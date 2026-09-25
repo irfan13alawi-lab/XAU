@@ -207,7 +207,14 @@ function publicWorkerTelemetry(value) {
   }
   const errorClass = typeof value.errorClass === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(value.errorClass)
     ? value.errorClass : null;
-  return { durationMs: safeDuration(value.durationMs), dependencies, errorClass };
+  const stages = {};
+  for (const name of ['healthMs', 'marketDataMs', 'newsMs', 'scanMs', 'executionMs', 'accountingMs']) {
+    const duration = safeDuration(value.stages?.[name]);
+    if (duration !== null) stages[name] = duration;
+  }
+  const result = { durationMs: safeDuration(value.durationMs), dependencies, errorClass };
+  if (Object.keys(stages).length) result.stages = stages;
+  return result;
 }
 
 const TELEMETRY_STATUS_VALUES = new Set([
