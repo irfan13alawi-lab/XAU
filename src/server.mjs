@@ -555,7 +555,10 @@ export function dashboardSnapshot(db, now = new Date()) {
       source: health.source,
       connected: brokerOnline,
       status: health.status,
-      checkedAt: health.checked_at,
+      // The worker heartbeat is the current health-check cadence. The
+      // broker_health table is intentionally transition-based, so its row is
+      // not rewritten on every unchanged 15-second check.
+      checkedAt: workerReady ? heartbeatAt : health.checked_at,
       reason,
     },
     market: {
