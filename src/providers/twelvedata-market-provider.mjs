@@ -10,16 +10,18 @@ const TIMEFRAMES = Object.freeze({
   H4: ['4h', 4 * 60 * 60_000],
 });
 // The worker checks health every 15 seconds. The background feed refreshes
-// quotes every two minutes, so worker ticks must reuse the cache instead of
-// turning provider I/O into recurring latency spikes.
+// quotes every minute, so worker ticks must reuse the cache instead of turning
+// provider I/O into recurring latency spikes.
 const QUOTE_CACHE_MS = 5 * 60_000;
 const CANDLE_CACHE_MS = 5 * 60_000;
 const CANDLE_COUNT = 300;
 const DAY_MS = 24 * 60 * 60_000;
-// Quotes and one candle timeframe refresh in the background every two minutes.
+// Quotes and one candle timeframe refresh in the background every minute.
 // Rotating four timeframes keeps M15 comfortably inside its freshness window
-// while leaving headroom under Twelve Data's per-minute credit limit.
-const CANDLE_CYCLE_MS = 2 * 60_000;
+// while leaving headroom under Twelve Data's per-minute credit limit. The
+// shorter cycle also leaves room for a failed provider attempt before the
+// five-minute quote freshness gate can fail closed.
+const CANDLE_CYCLE_MS = 60_000;
 const CANDLE_SETTLE_DELAY_MS = 2 * 60_000;
 const PROVIDER_REQUEST_TIMEOUT_MS = 12_000;
 const MAX_QUOTE_FUTURE_SKEW_MS = 30_000;
@@ -28,6 +30,8 @@ const MAX_QUOTE_FUTURE_SKEW_MS = 30_000;
 // stalled provider request can prevent every later quote/candle refresh and
 // eventually let the last-known-good quote set age past its TTL.
 const BACKGROUND_REFRESH_TIMEOUT_MS = 20_000;
+const BACKGROUND_RETRY_BASE_MS = 5_000;
+const BACKGROUND_RETRY_MAX_MS = 60_000;
 const TIMEFRAME_NAMES = Object.freeze(Object.keys(TIMEFRAMES));
 
 function number(value) {
@@ -354,6 +358,9 @@ export class TwelveDataMarketDataProvider {
   #backgroundTimer = null;
   #backgroundPrimingScheduled = false;
   #backgroundRefreshInFlight = false;
+  #backgroundRetryTimer = null;
+  #backgroundRetryAt = 0;
+  #backgroundFailureCount = 0;
 
   constructor({ symbols = config.symbols, backgroundRefreshTimeoutMs = BACKGROUND_REFRESH_TIMEOUT_MS } = {}) {
     const normalized = [...new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()))];
@@ -579,15 +586,17 @@ export class TwelveDataMarketDataProvider {
   }
 
   async #refreshBackgroundFeed() {
-    if (this.#backgroundRefreshInFlight) return;
+    if (this.#backgroundRefreshInFlight || Date.now() < this.#backgroundRetryAt) return;
     this.#backgroundRefreshInFlight = true;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.backgroundRefreshTimeoutMs);
     timeout.unref?.();
     const now = new Date();
+    let quoteRefreshSucceeded = false;
     try {
       try {
         await this.#readQuotes(now, controller.signal, { force: true });
+        quoteRefreshSucceeded = true;
       } catch (error) {
         this.#recordFailure(error);
       }
@@ -599,6 +608,24 @@ export class TwelveDataMarketDataProvider {
           await this.#readCandleBatch(timeframe, now, controller.signal);
         } catch (error) {
           this.#recordFailure(error);
+        }
+      }
+      if (quoteRefreshSucceeded) {
+        this.#backgroundFailureCount = 0;
+        this.#backgroundRetryAt = 0;
+      } else {
+        this.#backgroundFailureCount = Math.min(this.#backgroundFailureCount + 1, 6);
+        const retryDelay = Math.min(
+          BACKGROUND_RETRY_MAX_MS,
+          BACKGROUND_RETRY_BASE_MS * (2 ** (this.#backgroundFailureCount - 1)),
+        );
+        this.#backgroundRetryAt = Date.now() + retryDelay;
+        if (!this.#backgroundRetryTimer) {
+          this.#backgroundRetryTimer = setTimeout(() => {
+            this.#backgroundRetryTimer = null;
+            void this.#refreshBackgroundFeed();
+          }, retryDelay);
+          this.#backgroundRetryTimer.unref?.();
         }
       }
     } finally {
@@ -714,7 +741,11 @@ export class TwelveDataMarketDataProvider {
 
   stop() {
     if (this.#backgroundTimer) clearInterval(this.#backgroundTimer);
+    if (this.#backgroundRetryTimer) clearTimeout(this.#backgroundRetryTimer);
     this.#backgroundTimer = null;
+    this.#backgroundRetryTimer = null;
+    this.#backgroundRetryAt = 0;
+    this.#backgroundFailureCount = 0;
     this.#backgroundPrimingScheduled = false;
   }
 
