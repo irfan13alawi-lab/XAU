@@ -103,10 +103,16 @@ function nonNegative(value) {
   return value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) && Number(value) >= 0;
 }
 
-function writeStateIfChanged(db, key, value, now) {
+function writeStateIfChanged(db, key, value, now, stateCache = null) {
+  const serialized = JSON.stringify(value);
+  if (stateCache?.get(key) === serialized) return false;
   const current = readState(db, key, null);
-  if (JSON.stringify(current) === JSON.stringify(value)) return false;
+  if (JSON.stringify(current) === serialized) {
+    stateCache?.set(key, serialized);
+    return false;
+  }
   writeState(db, key, value, now);
+  stateCache?.set(key, serialized);
   return true;
 }
 
@@ -233,7 +239,7 @@ export class UnavailableNewsCalendarProvider {
   }
 }
 
-export function persistMarketData(db, payload, providerName, now = new Date()) {
+export function persistMarketData(db, payload, providerName, now = new Date(), { stateCache = null, snapshotCache = null } = {}) {
   const safeProvider = providerLabel(providerName);
   const source = String(payload?.source ?? '').trim().toUpperCase();
   const quotes = Object.values(payload?.quotesBySymbol ?? (payload?.quote ? { [payload.quote.symbol ?? 'XAUUSD']: payload.quote } : {}));
@@ -261,11 +267,11 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
     const instrumentMetadataBySymbol = payload?.instrumentMetadataBySymbol ?? {};
     const paperCostsBySymbol = payload?.paperCostsBySymbol ?? {};
     for (const symbol of normalizedQuotes.map((item) => item.symbol)) {
-      if (instrumentMetadataBySymbol[symbol]) writeStateIfChanged(db, `instrumentMetadata:${symbol}`, instrumentMetadataBySymbol[symbol], receivedAt);
-      if (paperCostsBySymbol[symbol]) writeStateIfChanged(db, `paperCosts:${symbol}`, paperCostsBySymbol[symbol], receivedAt);
+      if (instrumentMetadataBySymbol[symbol]) writeStateIfChanged(db, `instrumentMetadata:${symbol}`, instrumentMetadataBySymbol[symbol], receivedAt, stateCache);
+      if (paperCostsBySymbol[symbol]) writeStateIfChanged(db, `paperCosts:${symbol}`, paperCostsBySymbol[symbol], receivedAt, stateCache);
     }
-    if (payload?.instrumentMetadata) writeStateIfChanged(db, 'instrumentMetadata', payload.instrumentMetadata, receivedAt);
-    if (payload?.paperCosts) writeStateIfChanged(db, 'paperCosts', payload.paperCosts, receivedAt);
+    if (payload?.instrumentMetadata) writeStateIfChanged(db, 'instrumentMetadata', payload.instrumentMetadata, receivedAt, stateCache);
+    if (payload?.paperCosts) writeStateIfChanged(db, 'paperCosts', payload.paperCosts, receivedAt, stateCache);
     for (const { quote, symbol, observedTime, fresh } of normalizedQuotes) {
       // The legacy snapshot schema names the fresh status BROKER. Keep the
       // actual source in `source` so MARKET_DATA remains distinguishable.
@@ -274,7 +280,7 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
         ?? (symbol === 'XAUUSD' ? payload?.marketOverview : null)
         ?? null;
       const activeProvider = providerLabel(quote.provider ?? marketOverview?.provider ?? safeProvider);
-      const previousSnapshot = db.prepare(`
+      const previousSnapshot = snapshotCache?.get(symbol) ?? db.prepare(`
         SELECT source, status, bid, ask, last, observed_at, received_at
         FROM market_snapshots WHERE symbol = ? ORDER BY received_at DESC LIMIT 1
       `).get(symbol);
@@ -300,6 +306,12 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
             reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
           }));
       }
+      snapshotCache?.set(symbol, {
+        source, status: quoteStatus, bid: String(quote.bid), ask: String(quote.ask),
+        last: quote.last == null ? null : String(quote.last), observed_at: observedAt,
+        received_at: !sameQuote || snapshotRefreshDue || previousSnapshot.status !== quoteStatus
+          ? receivedAt : previousSnapshot.received_at,
+      });
 
       const candlesByTimeframe = payload?.persistCandlesBySymbol?.[symbol]
         ?? payload?.candlesBySymbol?.[symbol]
@@ -383,6 +395,8 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
+    stateCache?.clear();
+    snapshotCache?.clear();
     throw error;
   }
 
@@ -500,6 +514,8 @@ export class PaperWorker {
   #lastNewsAttemptAt = null;
   #telemetryPruneDue = true;
   #telemetryTicksSincePrune = 0;
+  #marketDataStateCache = new Map();
+  #marketSnapshotCache = new Map();
 
   constructor({
     db,
@@ -617,7 +633,10 @@ export class PaperWorker {
           const payload = await withDeadline((signal) => this.provider.readMarketData(now, { signal }), this.dependencyTimeoutMs);
           dependencies.marketData.durationMs = elapsedMilliseconds(marketStartedAt, this.monotonicNow());
           if (payload) {
-            quote = persistMarketData(this.db, payload, health.source, now);
+            quote = persistMarketData(this.db, payload, health.source, now, {
+              stateCache: this.#marketDataStateCache,
+              snapshotCache: this.#marketSnapshotCache,
+            });
             quotesBySymbol = quote.quotesBySymbol ?? {};
             marketDataResult = readState(this.db, 'marketDataHealth', null);
             dependencies.marketData.status = quote.dataFreshness === 'FRESH' ? 'HEALTHY' : 'STALE';
