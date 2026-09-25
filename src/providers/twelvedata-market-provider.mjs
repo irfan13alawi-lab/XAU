@@ -21,6 +21,7 @@ const DAY_MS = 24 * 60 * 60_000;
 // while leaving headroom under Twelve Data's per-minute credit limit.
 const CANDLE_CYCLE_MS = 2 * 60_000;
 const CANDLE_SETTLE_DELAY_MS = 2 * 60_000;
+const PROVIDER_REQUEST_TIMEOUT_MS = 5_000;
 // A background refresh must not hold the provider in-flight forever. The
 // worker health path is bounded separately, but without this deadline a
 // stalled provider request can prevent every later quote/candle refresh and
@@ -122,11 +123,20 @@ function errorWithCode(code) {
 }
 
 async function getJson(url, signal) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROVIDER_REQUEST_TIMEOUT_MS);
+  timeout.unref?.();
+  const abortParent = () => controller.abort(signal.reason);
+  if (signal?.aborted) controller.abort(signal.reason);
+  else signal?.addEventListener('abort', abortParent, { once: true });
   let response;
   try {
-    response = await fetch(url, { method: 'GET', headers: { accept: 'application/json' }, signal });
+    response = await fetch(url, { method: 'GET', headers: { accept: 'application/json' }, signal: controller.signal });
   } catch {
     throw errorWithCode('MARKET_DATA_NETWORK_ERROR');
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', abortParent);
   }
   let body;
   try { body = await response.json(); } catch { throw errorWithCode('MARKET_DATA_INVALID_RESPONSE'); }
