@@ -436,6 +436,29 @@ test('observed stop gaps execute at the current quote and persist gap evidence i
   }
 });
 
+test('paper loss integrity quarantines a catastrophic stop gap without deleting evidence', () => {
+  const db = fixtureDatabase();
+  const fillAt = new Date('2026-09-21T12:00:01.000Z');
+  try {
+    assert.equal(reconcilePaperExecution(db, {
+      quote: brokerQuote(fillAt, 2000.8, 2000.9), costs, now: fillAt,
+    }).filled, 1);
+    const stopAt = new Date('2026-09-21T12:01:01.000Z');
+    const result = reconcilePaperExecution(db, {
+      quote: brokerQuote(stopAt, 1900, 1900.2), costs, now: stopAt,
+    });
+    assert.equal(result.closed, 1);
+    const trade = db.prepare('SELECT accounting_status, accounting_reason, net_pnl FROM trades LIMIT 1').get();
+    assert.equal(trade.accounting_status, 'QUARANTINED');
+    assert.equal(trade.accounting_reason, 'LOSS_EXCEEDS_PAPER_RISK_TOLERANCE');
+    assert.ok(Number(trade.net_pnl) < -50);
+    assert.equal(readState(db, 'entryPaused'), true);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE event_type = 'PAPER_TRADE_QUARANTINED'").get().n, 1);
+  } finally {
+    db.close();
+  }
+});
+
 test('TP1 protects a minimum-lot partial entry at break-even and cancels its unfilled remainder', () => {
   const db = fixtureDatabase();
   const start = new Date('2026-09-21T12:00:00.000Z');

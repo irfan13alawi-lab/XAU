@@ -154,7 +154,7 @@
       : Number(market.overview.volume24h).toLocaleString('en-US'));
     setText('#marketDerivatives', market?.overview?.derivatives?.status === 'NOT_APPLICABLE' ? 'N/A · spot XAU' : 'UNAVAILABLE');
     setText('[data-market="freshness"]', market?.dataFreshness ?? 'UNAVAILABLE');
-    setText('#marketSource', `${market?.source ?? 'none'} · VPS read-only proxy · ${market?.reason ?? 'No verified feed'}`);
+    setText('#marketSource', `${market?.activeProvider ?? market?.source ?? 'none'} · VPS read-only proxy · ${market?.reason ?? 'No verified feed'}`);
     setText('#marketBadge', market?.status === 'BROKER' ? 'BROKER DATA' : market?.status ?? 'NO FEED');
     setText('#candleTimestamp', market?.lastClosedCandleAt ? `Closed ${timeOf(market.lastClosedCandleAt)}` : 'No closed candle received');
     setText('#chartEmpty', market?.quote ? 'Quote received · waiting for verified closed candles.' : 'Connect a verified market-data feed to display candles.');
@@ -663,7 +663,9 @@
     }
     setText('#brokerHealth', broker.status ?? 'OFFLINE');
     setText('#newsHealth', data.news?.status === 'HEALTHY' ? 'HEALTHY' : `${data.news?.status ?? 'UNKNOWN'} · ENTRY BLOCKED`);
-    setText('#scanStatus', data.lastScan ? `${data.lastScan.status} · ${timeOf(data.lastScan.completed_at)}` : 'Waiting for verified data');
+    setText('#scanStatus', data.lastScan
+      ? `${data.lastScan.status} · ${timeOf(data.lastScan.completed_at)}${data.lastScan.isCurrent === false ? ' · historical' : ''}`
+      : 'Waiting for verified data');
     setText('#pendingSetups', counts.pendingOrders ?? 0);
     setText('#pendingCount', `${counts.pendingOrders ?? 0} pending orders`);
     setText('#operatorAuthStatus', control.authConfigured

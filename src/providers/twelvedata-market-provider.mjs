@@ -112,7 +112,7 @@ async function getJson(url, signal) {
   return body;
 }
 
-function quoteFromResponse(body, symbol, now) {
+function quoteFromResponse(body, symbol, now, providerName = 'TwelveData') {
   const payload = body?.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : body;
   const mid = number(payload?.rate ?? payload?.value ?? payload?.price ?? payload?.close);
   const observedAt = parseTimestamp(payload?.timestamp ?? payload?.datetime ?? payload?.last_quote_at) ?? now;
@@ -122,6 +122,7 @@ function quoteFromResponse(body, symbol, now) {
   return {
     symbol,
     source: SOURCE,
+    provider: providerName,
     bid: Number((mid - half).toFixed(8)),
     ask: Number((mid + half).toFixed(8)),
     last: mid,
@@ -147,6 +148,7 @@ function quoteFromSwissquote(body, symbol, now) {
   return {
     symbol,
     source: SOURCE,
+    provider: 'Swissquote',
     bid: Number(bid.toFixed(8)),
     ask: Number(ask.toFixed(8)),
     last: mid,
@@ -166,6 +168,7 @@ function quoteFromBiquote(body, symbol, now) {
   return {
     symbol,
     source: SOURCE,
+    provider: 'Biquote',
     bid: providerBookValid ? Number(bid.toFixed(8)) : Number((mid - half).toFixed(8)),
     ask: providerBookValid ? Number(ask.toFixed(8)) : Number((mid + half).toFixed(8)),
     last: mid,

@@ -188,7 +188,7 @@ export const config = Object.freeze({
     allowedChatIds: telegramAllowedChatIds,
   }),
   buildId: localBuildId(),
-  schemaVersion: 10,
+  schemaVersion: 11,
   strategyProfileId,
   strategyVersion,
   strategyParameters,

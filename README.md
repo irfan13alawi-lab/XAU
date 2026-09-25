@@ -62,7 +62,8 @@ Evaluation accepts owner-classified broker history only; it never connects to a 
 
 - `GET /healthz` — liveness, readiness reasons, DB/worker/provider state, latest-cycle diagnostics, and retained one-hour worker telemetry.
 - `GET /api/telemetry/worker?window=1h|24h` — bounded aggregate cycle/dependency p50/p95/error summaries from local SQLite; no raw provider payloads, request samples, external tracing, or broker execution measurements.
-- `GET /api/dashboard`, `/bot/status`, `/api/market`, `/api/market/overview`, `/api/market/candles?timeframe=M15|M30|H1|H4`, `/api/mtf/latest`, `/api/news`, `/api/positions`, `/api/orders`, `/api/trades`, `/api/stats`, `/api/audit`, `/api/scan/latest`.
+- `GET /api/dashboard`, `/bot/status`, `/api/market`, `/api/market/overview`, `/api/market/candles?timeframe=M15|M30|H1|H4`, `/api/mtf/latest`, `/api/news`, `/api/positions`, `/api/orders`, `/api/trades?limit=25&cursor=...`, `/api/stats`, `/api/audit`, `/api/scan/latest`.
+- `/api/trades` returns paginated lean journal rows by default; add `details=true` for a bounded page containing the stored snapshot. Trades whose observed loss exceeds the paper risk-integrity tolerance remain retained but are marked `QUARANTINED` and excluded from equity/statistics.
 - `POST /api/actions/pause`, `/resume`, `/scan`, `/paper`, `/close` require same-origin and an `Idempotency-Key`; a configured `Authorization: Bearer` operator token is optional. When `NEXORA_CONTROL_TOKEN` is set, wrong or missing tokens return `401 CONTROL_AUTH_REQUIRED`. `/paper` accepts `{ "enabled": true|false }`; `/close` accepts only `{ "positionId": "..." }` and fails closed unless that paper position is open and a fresh verified broker quote plus cost assumptions are available. Resume remains blocked unless paper mode and readiness checks are both on.
 
 ## Tests and checks

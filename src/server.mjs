@@ -130,6 +130,22 @@ function parseJson(value, fallback = null) {
   try { return typeof value === 'string' ? JSON.parse(value) : value ?? fallback; } catch { return fallback; }
 }
 
+function encodeTradeCursor(row) {
+  return Buffer.from(JSON.stringify({ closedAt: row.closed_at, id: row.id })).toString('base64url');
+}
+
+function decodeTradeCursor(value) {
+  if (!value) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(String(value), 'base64url').toString('utf8'));
+    if (!decoded || typeof decoded.closedAt !== 'string' || typeof decoded.id !== 'string'
+      || !decoded.id || !Number.isFinite(Date.parse(decoded.closedAt))) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
 function marketOverview(row) {
   const details = parseJson(row?.details_json, {});
   return details && typeof details === 'object' && !Array.isArray(details) ? details.marketOverview ?? null : null;
@@ -377,6 +393,7 @@ function marketWatchlistSnapshot(db, now = new Date()) {
       SELECT symbol, source, status, bid, ask, last, observed_at, received_at, details_json
       FROM market_snapshots WHERE symbol = ? ORDER BY received_at DESC LIMIT 1
     `).get(symbol) ?? null;
+    const details = parseJson(latest?.details_json, {}) ?? {};
     const observedAt = latest?.observed_at ? Date.parse(latest.observed_at) : NaN;
     const receivedAt = latest?.received_at ? Date.parse(latest.received_at) : NaN;
     const fresh = isFreshMarketSnapshot(latest)
@@ -390,6 +407,7 @@ function marketWatchlistSnapshot(db, now = new Date()) {
     return {
       symbol,
       source: latest?.source ?? 'none',
+      activeProvider: details.provider ?? details.marketOverview?.provider ?? 'none',
       status: latest?.status ?? 'UNAVAILABLE',
       dataFreshness: fresh ? 'FRESH' : latest ? 'STALE' : 'UNAVAILABLE',
       quote: latest ? { bid: latest.bid, ask: latest.ask, last: latest.last, observedAt: latest.observed_at } : null,
@@ -399,7 +417,7 @@ function marketWatchlistSnapshot(db, now = new Date()) {
       candleFreshness: candleDataFreshness(lastCandle, 'M15', now),
       candleSource: lastCandle?.source ?? null,
       candleQuality: lastCandle?.quality ?? null,
-      reason: latest ? parseJson(latest.details_json).reason ?? null : 'NO_MARKET_SNAPSHOT',
+      reason: latest ? details.reason ?? null : 'NO_MARKET_SNAPSHOT',
     };
   });
 }
@@ -429,6 +447,9 @@ export function dashboardSnapshot(db, now = new Date()) {
     FROM orders WHERE status IN ('PENDING', 'PARTIAL') ORDER BY created_at DESC
   `).all();
   const trades = db.prepare(`SELECT COUNT(*) AS n FROM trades`).get().n;
+  const validTrades = db.prepare(`SELECT COUNT(*) AS n FROM trades WHERE accounting_status = 'VALID'`).get().n;
+  const quarantinedTrades = db.prepare(`SELECT COUNT(*) AS n FROM trades WHERE accounting_status = 'QUARANTINED'`).get().n;
+  const quarantinedEquitySnapshots = db.prepare(`SELECT COUNT(*) AS n FROM equity_snapshots WHERE accounting_status = 'QUARANTINED'`).get().n;
   const statistics = aggregateStats(db, now);
   const lastScan = db.prepare(`
     SELECT id, started_at, completed_at, status, reason_json FROM scan_runs ORDER BY started_at DESC LIMIT 1
@@ -438,6 +459,13 @@ export function dashboardSnapshot(db, now = new Date()) {
     FROM market_snapshots ORDER BY received_at DESC LIMIT 1
   `).get() ?? null;
   const marketDataHealth = readState(db, 'marketDataHealth', { status: 'UNAVAILABLE', reason: null });
+  const latestMarketDetails = parseJson(latestMarket?.details_json, {}) ?? {};
+  const healthDetails = parseJson(health.details_json, {}) ?? {};
+  const activeProvider = latestMarketDetails.provider
+    ?? latestMarketDetails.marketOverview?.provider
+    ?? healthDetails.activeProviders?.[0]
+    ?? healthDetails.provider
+    ?? config.marketSource;
   const receivedAt = latestMarket?.received_at ? Date.parse(latestMarket.received_at) : NaN;
   const observedAt = latestMarket?.observed_at ? Date.parse(latestMarket.observed_at) : NaN;
   const marketFresh = isFreshMarketSnapshot(latestMarket)
@@ -466,16 +494,17 @@ export function dashboardSnapshot(db, now = new Date()) {
     openRiskPct: riskState.freshness === 'FRESH' ? riskState.openRiskPct : null,
     limits: config.risk,
   });
-  const reason = JSON.parse(health.details_json).reason ?? null;
+  const reason = healthDetails.reason ?? null;
   const brokerOnline = health.status === 'HEALTHY';
   const entryPaused = readState(db, 'entryPaused', true);
   const paperMode = readState(db, 'paperMode', config.paperMode);
+  const riskBlocked = riskState.freshness !== 'FRESH' || !riskGuard.allowed;
   const botState = !brokerOnline && !paperMarketFeedConnected ? 'BROKER OFFLINE'
     : !marketFresh ? latestMarket ? 'DATA STALE' : 'PAPER CHECKING'
       : candleFreshness !== 'FRESH' ? 'CANDLE DATA BLOCKED'
         : !newsFresh ? 'NEWS UNAVAILABLE'
           : !paperMode ? 'MONITORING ONLY'
-          : entryPaused || riskState.freshness !== 'FRESH' || !riskGuard.allowed ? 'ENTRY PAUSED'
+          : entryPaused || riskBlocked ? 'ENTRY PAUSED'
             : !workerReady ? 'PAPER CHECKING' : 'PAPER ON';
   const stateReason = !brokerOnline && !paperMarketFeedConnected ? reason
     : !marketFresh ? 'Verified fresh broker quote is unavailable.'
@@ -505,11 +534,13 @@ export function dashboardSnapshot(db, now = new Date()) {
         'LIVE DISABLED',
       ])],
       entryPaused,
+      operatorPaused: entryPaused,
+      riskBlocked,
       entriesAllowed: botState === 'PAPER ON',
       stateReason,
     },
     broker: {
-      name: config.brokerName === 'none' ? 'Not selected' : config.brokerName,
+      name: activeProvider === 'none' ? 'Not selected' : activeProvider,
       source: health.source,
       connected: brokerOnline,
       status: health.status,
@@ -519,6 +550,7 @@ export function dashboardSnapshot(db, now = new Date()) {
     market: {
       symbol: 'XAUUSD',
       source: latestMarket?.source ?? health.source,
+      activeProvider,
       status: latestMarket?.status ?? marketDataHealth.status ?? 'UNAVAILABLE',
       dataFreshness: marketFresh ? 'FRESH' : latestMarket ? 'STALE' : 'UNAVAILABLE',
       candleFreshness,
@@ -533,7 +565,7 @@ export function dashboardSnapshot(db, now = new Date()) {
       dataContract: {
         marketData: 'READ_ONLY_VPS_PROXY',
         execution: 'PAPER_ONLY',
-        provider: latestMarket ? config.marketSource : 'none',
+        provider: latestMarket ? activeProvider : 'none',
         marketType: 'SPOT_OTC',
         derivatives: 'NOT_APPLICABLE_FOR_SPOT_XAU',
       },
@@ -543,7 +575,7 @@ export function dashboardSnapshot(db, now = new Date()) {
       spreadPrice: Number.isFinite(spreadPrice) && spreadPrice >= 0 ? spreadPrice : null,
       spreadPoints: Number.isFinite(spreadPrice) && Number(instrument?.tickSize) > 0 ? spreadPrice / Number(instrument.tickSize) : null,
       session: activeSessions(now),
-      reason: latestMarket ? JSON.parse(latestMarket.details_json).reason ?? null : marketDataHealth.reason ?? reason,
+      reason: latestMarket ? latestMarketDetails.reason ?? null : marketDataHealth.reason ?? reason,
     },
     symbols: config.symbols,
     markets: marketWatchlistSnapshot(db, now),
@@ -587,12 +619,22 @@ export function dashboardSnapshot(db, now = new Date()) {
       openPositions: positions.length,
       pendingOrders: orders.length,
       closedTrades: trades,
+      validClosedTrades: validTrades,
+      quarantinedTrades,
+      quarantinedEquitySnapshots,
       forwardPaperTrades: statistics.forwardEvidence.closedBrokerPaperTrades,
       forwardPaperTradesRequired: statistics.forwardEvidence.required,
     },
     positions,
     orders,
-    lastScan: lastScan ? { ...lastScan, reasons: JSON.parse(lastScan.reason_json) } : null,
+    lastScan: lastScan ? {
+      ...lastScan,
+      reasons: parseJson(lastScan.reason_json, []),
+      ageMs: Number.isFinite(Date.parse(lastScan.completed_at ?? lastScan.started_at ?? ''))
+        ? Math.max(0, now.getTime() - Date.parse(lastScan.completed_at ?? lastScan.started_at)) : null,
+      isCurrent: Number.isFinite(Date.parse(lastScan.completed_at ?? lastScan.started_at ?? ''))
+        && now.getTime() - Date.parse(lastScan.completed_at ?? lastScan.started_at) <= 20 * 60_000,
+    } : null,
     statistics,
   };
 }
@@ -868,7 +910,32 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
         return jsonResponse(res, 200, db.prepare(`SELECT * FROM orders ORDER BY created_at DESC LIMIT 100`).all());
       }
       if (method === 'GET' && url.pathname === '/api/trades') {
-        return jsonResponse(res, 200, db.prepare(`SELECT * FROM trades ORDER BY closed_at DESC LIMIT 100`).all());
+        const rawLimit = Number(url.searchParams.get('limit') ?? 25);
+        const limit = Number.isInteger(rawLimit) ? Math.max(1, Math.min(100, rawLimit)) : 25;
+        const cursorValue = url.searchParams.get('cursor');
+        const cursor = decodeTradeCursor(cursorValue);
+        if (cursorValue && !cursor) return jsonResponse(res, 400, { error: 'TRADE_CURSOR_INVALID' });
+        const details = url.searchParams.get('details') === 'true';
+        const columns = details
+          ? '*'
+          : `id, position_id, symbol, side, gross_pnl, net_pnl, pnl_r, commission, swap,
+             close_reason, setup_quality, market_condition, opened_at, closed_at,
+             duration_seconds, entry_delay_seconds, mfe, mae, review_class,
+             accounting_status, accounting_reason`;
+        const where = cursor ? 'WHERE (closed_at < ? OR (closed_at = ? AND id < ?))' : '';
+        const parameters = cursor ? [cursor.closedAt, cursor.closedAt, cursor.id, limit + 1] : [limit + 1];
+        const rows = db.prepare(`SELECT ${columns} FROM trades ${where} ORDER BY closed_at DESC, id DESC LIMIT ?`).all(...parameters);
+        const hasMore = rows.length > limit;
+        const page = rows.slice(0, limit);
+        return jsonResponse(res, 200, {
+          trades: page,
+          pagination: {
+            limit,
+            hasMore,
+            nextCursor: hasMore ? encodeTradeCursor(page.at(-1)) : null,
+            details,
+          },
+        });
       }
       if (method === 'GET' && url.pathname === '/api/stats') {
         return jsonResponse(res, 200, aggregateStats(db, now));

@@ -105,7 +105,7 @@ test('health separates process liveness from market readiness', async () => {
   assert.equal(body.buildId, config.buildId);
   assert.notEqual(body.buildId, 'LOCAL-UNVERSIONED');
   assert.match(body.buildId, /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/);
-  assert.equal(body.schemaVersion, 10);
+  assert.equal(body.schemaVersion, 11);
   assert.equal(body.controlActionsAvailable, true);
   assert.equal(body.worker.lastTick, null);
 });
@@ -425,6 +425,16 @@ test('dashboard reports unavailable values instead of invented account or market
   assert.equal(body.telegram.status, 'DISABLED');
   assert.equal(body.app.buildId, config.buildId);
   assert.equal(JSON.stringify(body.telegram).includes('token'), false);
+});
+
+test('trade journal API returns bounded paginated summaries instead of unbounded snapshots', async () => {
+  const response = await fetch(`${origin}/api/trades?limit=1`);
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.ok(Array.isArray(body.trades));
+  assert.equal(body.pagination.limit, 1);
+  assert.equal(body.pagination.details, false);
+  assert.equal(Object.hasOwn(body.trades[0] ?? {}, 'snapshot_json'), false);
 });
 
 test('positions API preserves last marks and redacts stored snapshots at the response boundary', async () => {
@@ -926,7 +936,7 @@ test('SQLite state survives closing and reopening the database', () => {
   initializeDatabase(recoveredDb, new Date('2026-09-21T00:10:00.000Z'));
   assert.equal(readState(recoveredDb, 'entryPaused'), true);
   assert.equal(readState(recoveredDb, 'paperMode'), false);
-  assert.equal(recoveredDb.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get().n, 10);
+  assert.equal(recoveredDb.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get().n, 11);
   recoveredDb.close();
   rmSync(directory, { recursive: true, force: true });
 });

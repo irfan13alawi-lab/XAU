@@ -273,6 +273,7 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
       const marketOverview = payload?.marketOverviewBySymbol?.[symbol]
         ?? (symbol === 'XAUUSD' ? payload?.marketOverview : null)
         ?? null;
+      const activeProvider = providerLabel(quote.provider ?? marketOverview?.provider ?? safeProvider);
       const previousSnapshot = db.prepare(`
         SELECT source, status, bid, ask, last, observed_at, received_at
         FROM market_snapshots WHERE symbol = ? ORDER BY received_at DESC LIMIT 1
@@ -293,7 +294,7 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(randomUUID(), symbol, source, quoteStatus, String(quote.bid), String(quote.ask), quote.last == null ? null : String(quote.last),
           observedAt, receivedAt, JSON.stringify({
-            provider: safeProvider,
+            provider: activeProvider,
             spreadModel: payload.paperSpread ?? null,
             marketOverview,
             reason: fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
@@ -368,7 +369,10 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
     }
     const fresh = primary.fresh;
     writeState(db, 'marketDataHealth', {
-      status: fresh ? 'HEALTHY' : 'STALE', provider: safeProvider, source, checkedAt: receivedAt,
+      status: fresh ? 'HEALTHY' : 'STALE', provider: safeProvider,
+      activeProviders: [...new Set(normalizedQuotes.map(({ quote, symbol }) => providerLabel(
+        quote.provider ?? payload?.marketOverviewBySymbol?.[symbol]?.provider ?? safeProvider,
+      )))], source, checkedAt: receivedAt,
       symbols: normalizedQuotes.map((item) => item.symbol), insertedCandles, rejectedCandles, conflicts, repairedCandles,
       reason: !fresh ? 'QUOTE_STALE_OR_CLOCK_SKEW' : rejectedCandles || conflicts ? 'CANDLE_QUALITY_ISSUES' : null,
     }, receivedAt);
@@ -383,12 +387,13 @@ export function persistMarketData(db, payload, providerName, now = new Date()) {
   }
 
   return {
-    symbol: primary.symbol, source, status: primary.fresh ? source : 'STALE',
+    symbol: primary.symbol, source, provider: providerLabel(primary.quote.provider ?? payload?.marketOverview?.provider ?? safeProvider), status: primary.fresh ? source : 'STALE',
     dataFreshness: primary.fresh ? 'FRESH' : 'STALE', bid: Number(primary.quote.bid), ask: Number(primary.quote.ask),
     last: primary.quote.last == null ? null : Number(primary.quote.last), observedAt: new Date(primary.observedTime).toISOString(),
     receivedAt, reason: primary.fresh ? null : 'QUOTE_STALE_OR_CLOCK_SKEW',
       quotesBySymbol: Object.fromEntries(normalizedQuotes.map(({ quote, symbol, observedTime, fresh }) => [symbol, {
-        symbol, source, status: fresh ? source : 'STALE', dataFreshness: fresh ? 'FRESH' : 'STALE',
+        symbol, source, provider: providerLabel(quote.provider ?? payload?.marketOverviewBySymbol?.[symbol]?.provider ?? safeProvider),
+        status: fresh ? source : 'STALE', dataFreshness: fresh ? 'FRESH' : 'STALE',
         bid: Number(quote.bid), ask: Number(quote.ask), last: quote.last == null ? null : Number(quote.last),
         observedAt: new Date(observedTime).toISOString(), receivedAt,
         overview: payload?.marketOverviewBySymbol?.[symbol]

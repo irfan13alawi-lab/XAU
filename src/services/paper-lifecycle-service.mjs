@@ -7,6 +7,9 @@ import { loadFreshRiskMetrics } from './risk-state-service.mjs';
 import { isAcceptedMarketSource } from '../market-source.mjs';
 
 const PAPER_EXECUTION_QUOTE_MAX_AGE_MS = 30_000;
+// A paper stop may incur a small modeled gap/slippage, but a loss many times
+// larger than the persisted risk budget is an accounting/data-integrity event.
+const MAX_ACCEPTED_PAPER_LOSS_R = 1.5;
 
 const n = (value, fallback = 0) => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value)) ? Number(value) : fallback;
 const money = (value) => Number(Number(value).toFixed(2));
@@ -175,6 +178,9 @@ function insertTrade(db, { position, close, grossTotal, commissionTotal, swapTot
   const seconds = Number.isFinite(openedAt) ? Math.max(0, Math.floor((closedAt - openedAt) / 1000)) : 0;
   const riskAmount = n(position.initial_risk_amount);
   const pnlR = riskAmount > 0 ? Number((netTotal / riskAmount).toFixed(6)) : null;
+  const lossR = riskAmount > 0 && netTotal < 0 ? Number((-netTotal / riskAmount).toFixed(6)) : 0;
+  const accountingStatus = lossR > MAX_ACCEPTED_PAPER_LOSS_R ? 'QUARANTINED' : 'VALID';
+  const accountingReason = accountingStatus === 'QUARANTINED' ? 'LOSS_EXCEEDS_PAPER_RISK_TOLERANCE' : null;
   const storedSnapshot = json(position.snapshot_json);
   const orderCreatedAt = Date.parse(db.prepare('SELECT created_at FROM orders WHERE id = ?').get(position.order_id)?.created_at ?? '');
   const firstFillAt = Date.parse(snapshot.firstFillAt ?? storedSnapshot.firstFillAt ?? '');
@@ -190,13 +196,14 @@ function insertTrade(db, { position, close, grossTotal, commissionTotal, swapTot
   db.prepare(`
     INSERT INTO trades (id, position_id, symbol, side, gross_pnl, net_pnl, pnl_r, commission, swap,
       close_reason, setup_quality, market_condition, opened_at, closed_at, duration_seconds,
-      entry_delay_seconds, mfe, mae, snapshot_json, review_class)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      entry_delay_seconds, mfe, mae, snapshot_json, review_class, accounting_status, accounting_reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     tradeId, position.id, position.symbol, position.side, text(grossTotal), text(netTotal), pnlR,
     text(commissionTotal), text(swapTotal), close.closeReason, classification.setupQuality.join('|'),
     classification.marketConditions.join('|'), position.opened_at,
     now.toISOString(), seconds, entryDelaySeconds, text(position.mfe), text(position.mae), JSON.stringify(completeSnapshot), classification.reviewClass,
+    accountingStatus, accountingReason,
   );
   const saveSnapshot = db.prepare(`
     INSERT INTO trade_snapshots (id, trade_id, snapshot_type, snapshot_json, created_at)
@@ -213,7 +220,7 @@ function insertTrade(db, { position, close, grossTotal, commissionTotal, swapTot
     INSERT INTO trade_snapshots (id, trade_id, snapshot_type, snapshot_json, created_at)
     VALUES (?, ?, 'CLOSE', ?, ?)
   `).run(randomUUID(), tradeId, JSON.stringify(completeSnapshot), now.toISOString());
-  return { tradeId, pnlR, classification };
+  return { tradeId, pnlR, lossR, accountingStatus, accountingReason, classification };
 }
 
 function monitorPosition(db, initial, quote, fallbackCosts, now, { manualClose = false, withinTransaction = false, httpRequestId = null } = {}) {
@@ -348,6 +355,21 @@ function monitorPosition(db, initial, quote, fallbackCosts, now, { manualClose =
     if (result.status === 'CLOSED') {
       const tradeSnapshot = { ...nextSnapshot, exit: { price: result.exitPrice, quote, reason: result.closeReason, costs } };
       const trade = insertTrade(db, { position, close: result, grossTotal, commissionTotal, swapTotal, netTotal: money(grossTotal - commissionTotal - swapTotal), now, snapshot: tradeSnapshot });
+      if (trade.accountingStatus === 'QUARANTINED') {
+        appendAudit(db, {
+          actor: 'paper-worker', eventType: 'PAPER_TRADE_QUARANTINED',
+          correlationId, configVersion: snapshot.configVersion ?? 'mtf-paper-v1',
+          entityType: 'trade', entityId: trade.tradeId, reason: trade.accountingReason,
+          metadata: {
+            lossR: trade.lossR,
+            maxAcceptedLossR: MAX_ACCEPTED_PAPER_LOSS_R,
+            netPnl: money(grossTotal - commissionTotal - swapTotal),
+            initialRiskAmount: n(position.initial_risk_amount),
+            positionId: position.id,
+          },
+        }, now.toISOString());
+        writeState(db, 'entryPaused', true, now.toISOString());
+      }
       db.prepare('UPDATE signals SET status = ? WHERE id = (SELECT signal_id FROM orders WHERE id = ?)').run('CLOSED', position.order_id);
       const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(position.order_id);
       if (order?.status === 'PARTIAL') expireOrderInsideTransaction(db, order, now, 'POSITION_CLOSED_REMAINDER_CANCELLED');
