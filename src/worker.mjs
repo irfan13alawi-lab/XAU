@@ -591,14 +591,17 @@ export class PaperWorker {
     const now = this.clock();
     const tickStartedAt = this.monotonicNow();
     let telemetryRecordAttempted = false;
+    const stages = {};
     const dependencies = {
       brokerHealth: { attempted: true, durationMs: null, status: 'NOT_ATTEMPTED' },
       marketData: { attempted: false, durationMs: null, status: 'SKIPPED' },
       newsCalendar: { attempted: false, durationMs: null, status: 'NOT_ATTEMPTED' },
     };
     try {
+      const stageHealthStartedAt = performance.now();
       const healthStartedAt = this.monotonicNow();
       const health = await this.#readHealth(now);
+      stages.healthMs = elapsedMilliseconds(stageHealthStartedAt, performance.now());
       dependencies.brokerHealth = {
         attempted: true, durationMs: elapsedMilliseconds(healthStartedAt, this.monotonicNow()), status: health.status,
       };
@@ -608,6 +611,7 @@ export class PaperWorker {
       let marketDataResult = null;
       if (health.status === 'HEALTHY' && typeof this.provider.readMarketData === 'function') {
         dependencies.marketData = { attempted: true, durationMs: null, status: 'UNAVAILABLE' };
+        const stageMarketStartedAt = performance.now();
         const marketStartedAt = this.monotonicNow();
         try {
           const payload = await withDeadline((signal) => this.provider.readMarketData(now, { signal }), this.dependencyTimeoutMs);
@@ -635,9 +639,12 @@ export class PaperWorker {
             appendAudit(this.db, { eventType: 'MARKET_DATA_INGESTION_FAILED', reason: failed.reason, metadata: { provider: health.source } }, now.toISOString());
           }
         }
+        stages.marketDataMs = elapsedMilliseconds(stageMarketStartedAt, performance.now());
       }
 
+      const newsStartedAt = performance.now();
       const newsResult = await this.#refreshNews(now);
+      stages.newsMs = elapsedMilliseconds(newsStartedAt, performance.now());
       const news = newsResult.state;
       dependencies.newsCalendar = {
         attempted: newsResult.attempted,
@@ -645,6 +652,7 @@ export class PaperWorker {
         status: newsResult.attempted ? news.status : 'CACHED',
       };
       const scans = [];
+      const scanStartedAt = performance.now();
       for (const symbol of this.tradeSymbols) {
         const closeAt = freshClosedM15(this.db, now, symbol);
         const scanStateKey = symbol === 'XAUUSD' ? 'lastWorkerM15Close' : `lastWorkerM15Close:${symbol}`;
@@ -655,7 +663,9 @@ export class PaperWorker {
           scans.push({ symbol, scanId: evaluated.persisted.scanId, status: evaluated.persisted.status, replayed: evaluated.persisted.replayed, reasons: evaluated.persisted.reasons });
         }
       }
+      stages.scanMs = elapsedMilliseconds(scanStartedAt, performance.now());
 
+      const executionStartedAt = performance.now();
       const execution = { expired: 0, cancelled: 0, filled: 0, monitored: 0, closed: 0, skipped: 0, reasons: [] };
       const activeExecutionSymbols = new Set(this.db.prepare(`
         SELECT symbol FROM orders WHERE status IN ('PENDING', 'PARTIAL')
@@ -675,11 +685,15 @@ export class PaperWorker {
         for (const field of ['expired', 'cancelled', 'filled', 'monitored', 'closed', 'skipped']) execution[field] += Number(result[field] ?? 0);
         for (const reason of result.reasons ?? []) if (!execution.reasons.includes(reason)) execution.reasons.push(reason);
       }
+      stages.executionMs = elapsedMilliseconds(executionStartedAt, performance.now());
+      const accountingStartedAt = performance.now();
       capturePaperEquitySnapshot(this.db, now);
       if (readState(this.db, 'paperMode', config.paperMode) === true) persistPaperRiskState(this.db, now);
+      stages.accountingMs = elapsedMilliseconds(accountingStartedAt, performance.now());
       const telemetry = {
         durationMs: elapsedMilliseconds(tickStartedAt, this.monotonicNow()),
         dependencies,
+        stages,
         errorClass: null,
       };
       persistWorkerCycleTelemetry(this.db, telemetry, now,
