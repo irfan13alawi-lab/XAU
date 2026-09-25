@@ -21,7 +21,7 @@ const DAY_MS = 24 * 60 * 60_000;
 // while leaving headroom under Twelve Data's per-minute credit limit.
 const CANDLE_CYCLE_MS = 2 * 60_000;
 const CANDLE_SETTLE_DELAY_MS = 2 * 60_000;
-const PROVIDER_REQUEST_TIMEOUT_MS = 5_000;
+const PROVIDER_REQUEST_TIMEOUT_MS = 12_000;
 const MAX_QUOTE_FUTURE_SKEW_MS = 30_000;
 // A background refresh must not hold the provider in-flight forever. The
 // worker health path is bounded separately, but without this deadline a
@@ -212,7 +212,7 @@ function quoteFromBiquote(body, symbol, now) {
   // non-positive convenience field discard a usable two-sided quote.
   const mid = reportedMid != null && reportedMid > 0
     ? reportedMid : (bid != null && ask != null ? (bid + ask) / 2 : null);
-  const observedAt = normalizeObservedAt(body?.timestamp ?? body?.lastQuoteAt, now);
+  const observedAt = normalizeObservedAt(body?.lastQuoteAt ?? body?.timestamp, now);
   const spread = configuredSpread();
   if (body?.stale === true || mid == null || mid <= 0 || spread == null || !observedAt) return null;
   const providerBookValid = bid != null && ask != null && bid > 0 && ask >= bid;
@@ -386,13 +386,15 @@ export class TwelveDataMarketDataProvider {
   #cachedQuotes(now) {
     if (this.#completeQuoteSnapshot
       && Date.now() - this.#completeQuoteSnapshotFetchedAt < QUOTE_CACHE_MS
-      && this.symbols.every((symbol) => quoteWithinCandleRange(this.#candleCache, symbol, this.#completeQuoteSnapshot[symbol]))) {
+      && this.symbols.every((symbol) => quoteIsFresh(this.#completeQuoteSnapshot[symbol], now)
+        && quoteWithinCandleRange(this.#candleCache, symbol, this.#completeQuoteSnapshot[symbol]))) {
       return { ...this.#completeQuoteSnapshot };
     }
     const quotes = {};
     for (const symbol of this.symbols) {
       const cached = this.#quoteCache.get(symbol);
       if (cached && Date.now() - cached.fetchedAt < QUOTE_CACHE_MS
+        && quoteIsFresh(cached.value, now)
         && quoteWithinCandleRange(this.#candleCache, symbol, cached.value)) quotes[symbol] = cached.value;
     }
     return quotes;

@@ -285,7 +285,7 @@ test('Twelve Data adapter refreshes cached candle timeframes instead of freezing
   globalThis.fetch = async (input) => {
     const url = new URL(input);
     if (url.pathname.endsWith('/currency_conversion')) {
-      return new Response(JSON.stringify({ rate: '2030.50', timestamp: Math.floor(clock / 1000) }), { status: 200 });
+      return new Response(JSON.stringify({ rate: '2030.50', timestamp: Math.floor(new Date().getTime() / 1000) }), { status: 200 });
     }
     candleRequests += 1;
     const interval = url.searchParams.get('interval');
@@ -307,9 +307,9 @@ test('Twelve Data adapter refreshes cached candle timeframes instead of freezing
     for (let cycle = 0; cycle < 4; cycle += 1) {
       clock += 2 * 60_000 + 1;
       backgroundTick();
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 200));
     }
-    const refreshed = await provider.readMarketData(new Date(clock));
+    const refreshed = await provider.readMarketData(new Date());
     const refreshedM15ClosedAt = refreshed.candlesBySymbol.XAUUSD.M15.at(-1).closedAt;
     assert.equal(candleRequests, 5, 'initial M15 plus one request for each rotated timeframe');
     assert.notEqual(refreshedM15ClosedAt, firstM15ClosedAt);
@@ -522,7 +522,7 @@ test('stale Twelve Data quotes fall back to a fresh Biquote quote', async () => 
     }
     if (url.hostname === 'biquote.io') {
       if (url.pathname.endsWith('/ohlc')) return new Response(JSON.stringify({ bars: [] }), { status: 200 });
-      return new Response(JSON.stringify({ symbol: url.pathname.split('/').at(-1), bid: '2030.40', ask: '2030.60', mid: '0.00000', timestamp: new Date(now.getTime() + 5_000).toISOString(), stale: false }), { status: 200 });
+      return new Response(JSON.stringify({ symbol: url.pathname.split('/').at(-1), bid: '2030.40', ask: '2030.60', mid: '0.00000', timestamp: new Date(now.getTime() - 10 * 60_000).toISOString(), lastQuoteAt: new Date(now.getTime() + 5_000).toISOString(), stale: false }), { status: 200 });
     }
     return new Response(JSON.stringify([]), { status: 200 });
   };
