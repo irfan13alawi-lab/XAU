@@ -1358,6 +1358,7 @@ function bootstrap() {
         provider: createMarketProvider(),
         newsProvider: createNewsProvider(),
         symbols: config.symbols,
+        tradeSymbols: config.tradeSymbols,
       });
       worker.start();
       initialized = true;

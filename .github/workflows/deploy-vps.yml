@@ -120,6 +120,7 @@ jobs:
           upsert_env NEXORA_MARKET_SOURCE twelvedata
           upsert_env NEXORA_NEWS_SOURCE forexfactory
           upsert_env NEXORA_SYMBOLS XAUUSD,EURUSD,GBPUSD,USDJPY
+          upsert_env NEXORA_TRADE_SYMBOLS XAUUSD
           upsert_env NEXORA_PAPER_SPREAD_PRICE 0.20
           upsert_env NEXORA_PAPER_MAX_SPREAD_PRICE 0.50
           upsert_env NEXORA_PAPER_STARTING_EQUITY 10000

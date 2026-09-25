@@ -102,6 +102,19 @@ function configuredSymbols(value) {
 
 const symbols = configuredSymbols(process.env.NEXORA_SYMBOLS);
 
+function configuredTradeSymbols(value, availableSymbols) {
+  const tradeSymbols = String(value ?? 'XAUUSD')
+    .split(',').map((item) => item.trim().toUpperCase()).filter(Boolean);
+  if (!tradeSymbols.length || tradeSymbols.length > availableSymbols.length
+    || tradeSymbols.some((symbol) => !/^[A-Z0-9]{6,12}$/.test(symbol) || !availableSymbols.includes(symbol))) {
+    throw new Error('NEXORA_TRADE_SYMBOLS must contain only symbols enabled by NEXORA_SYMBOLS.');
+  }
+  if (!tradeSymbols.includes('XAUUSD')) tradeSymbols.unshift('XAUUSD');
+  return Object.freeze([...new Set(tradeSymbols)]);
+}
+
+const tradeSymbols = configuredTradeSymbols(process.env.NEXORA_TRADE_SYMBOLS, symbols);
+
 const paperStartingEquityRaw = String(process.env.NEXORA_PAPER_STARTING_EQUITY ?? '').trim();
 const paperStartingEquity = paperStartingEquityRaw === '' ? null : Number(paperStartingEquityRaw);
 if (paperStartingEquity != null && (!Number.isFinite(paperStartingEquity) || paperStartingEquity <= 0)) {
@@ -172,6 +185,7 @@ export const config = Object.freeze({
   paperMode: paperFlag === 'true',
   liveTradingEnabled: false,
   symbols,
+  tradeSymbols,
   paperStartingEquity,
   paperCurrency,
   brokerName: safeProviderLabel(process.env.NEXORA_BROKER ?? 'none'),

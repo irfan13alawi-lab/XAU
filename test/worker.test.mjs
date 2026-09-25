@@ -213,6 +213,35 @@ test('worker ingests normalized data, applies news blackout, and scans a new clo
   }
 });
 
+test('worker ingests the full watchlist but scans only configured paper-trading symbols', async () => {
+  const now = new Date('2026-09-21T12:00:00.000Z');
+  const db = dbFixture(now);
+  try {
+    const quote = (symbol, bid) => ({
+      symbol, source: 'BROKER', bid, ask: bid + 0.2, last: bid + 0.1, observedAt: now.toISOString(),
+    });
+    const source = providers(now);
+    source.provider.readMarketData = async () => ({
+      source: 'BROKER',
+      quotesBySymbol: { XAUUSD: quote('XAUUSD', 2010), EURUSD: quote('EURUSD', 1.1) },
+      candlesBySymbol: { XAUUSD: closedCandles(now), EURUSD: closedCandles(now) },
+      riskMetrics: { equity: 10_000, currency: 'USD', dailyLossR: 0, drawdownPct: 0, maxSpreadPrice: 1, observedAt: now.toISOString() },
+    });
+    const worker = new PaperWorker({
+      db, ...source, symbols: ['XAUUSD', 'EURUSD'], tradeSymbols: ['XAUUSD'], clock: () => now,
+    });
+    const result = await worker.tick();
+    assert.deepEqual(result.scans.map((scan) => scan.symbol), ['XAUUSD']);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM market_snapshots').get().n, 2);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM candles').get().n, 880);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scan_runs').get().n, 1);
+    assert.equal(readState(db, 'lastWorkerM15Close'), '2026-09-21T11:45:00.000Z');
+    assert.equal(readState(db, 'lastWorkerM15Close:EURUSD', null), null);
+  } finally {
+    db.close();
+  }
+});
+
 test('worker keeps stale risk timestamps stale and rejects null provider risk metrics', async () => {
   const now = new Date('2026-09-21T12:00:00.000Z');
   const db = dbFixture(now);

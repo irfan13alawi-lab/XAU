@@ -511,6 +511,7 @@ export class PaperWorker {
     dependencyTimeoutMs = TIMEOUT_MS,
     monotonicNow = () => performance.now(),
     symbols = ['XAUUSD'],
+    tradeSymbols = ['XAUUSD'],
   }) {
     this.db = db;
     this.provider = provider;
@@ -521,6 +522,12 @@ export class PaperWorker {
     this.dependencyTimeoutMs = dependencyTimeoutMs;
     this.monotonicNow = monotonicNow;
     this.symbols = Object.freeze([...new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()))]);
+    const availableSymbols = new Set(this.symbols);
+    const requestedTradeSymbols = [...new Set(tradeSymbols.map((symbol) => String(symbol).trim().toUpperCase()))];
+    if (!requestedTradeSymbols.length || requestedTradeSymbols.some((symbol) => !availableSymbols.has(symbol))) {
+      throw new TypeError('tradeSymbols must be a non-empty subset of symbols.');
+    }
+    this.tradeSymbols = Object.freeze(requestedTradeSymbols);
     this.running = false;
   }
 
@@ -638,7 +645,7 @@ export class PaperWorker {
         status: newsResult.attempted ? news.status : 'CACHED',
       };
       const scans = [];
-      for (const symbol of this.symbols) {
+      for (const symbol of this.tradeSymbols) {
         const closeAt = freshClosedM15(this.db, now, symbol);
         const scanStateKey = symbol === 'XAUUSD' ? 'lastWorkerM15Close' : `lastWorkerM15Close:${symbol}`;
         const lastScanClose = readState(this.db, scanStateKey, null);
