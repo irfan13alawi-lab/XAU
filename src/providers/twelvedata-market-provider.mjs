@@ -33,6 +33,21 @@ function positive(value) {
   return parsed != null && parsed > 0;
 }
 
+function quoteMatchesSymbol(payload, symbol) {
+  const reportedSymbol = normalizedSymbol(payload?.symbol ?? payload?.meta?.symbol ?? payload?.instrument);
+  return !reportedSymbol || reportedSymbol === normalizedSymbol(providerSymbol(symbol));
+}
+
+function quoteWithinCandleRange(candleCache, symbol, quote) {
+  const latestCandle = candleCache?.get(symbol)?.get('M15')?.value?.at(-1);
+  const baseline = number(latestCandle?.close);
+  const value = number(quote?.last);
+  if (baseline == null || baseline <= 0 || value == null || value <= 0) return true;
+  // A wrong-symbol response can still pass bid/ask validation. Reject it
+  // against the last verified candle without hard-coding an absolute price.
+  return Math.abs(value - baseline) / baseline <= 0.25;
+}
+
 function apiKey() {
   return String(process.env.NEXORA_TWELVEDATA_API_KEY ?? '').trim();
 }
@@ -114,6 +129,7 @@ async function getJson(url, signal) {
 
 function quoteFromResponse(body, symbol, now, providerName = 'TwelveData') {
   const payload = body?.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : body;
+  if (!quoteMatchesSymbol(payload, symbol)) return null;
   const mid = number(payload?.rate ?? payload?.value ?? payload?.price ?? payload?.close);
   const observedAt = parseTimestamp(payload?.timestamp ?? payload?.datetime ?? payload?.last_quote_at) ?? now;
   const spread = configuredSpread();
@@ -157,6 +173,7 @@ function quoteFromSwissquote(body, symbol, now) {
 }
 
 function quoteFromBiquote(body, symbol, now) {
+  if (!quoteMatchesSymbol(body, symbol)) return null;
   const bid = number(body?.bid);
   const ask = number(body?.ask);
   const mid = number(body?.mid) ?? (bid != null && ask != null ? (bid + ask) / 2 : null);
@@ -253,7 +270,7 @@ function marketOverviewFromCandles(symbol, quote, candlesByTimeframe, now, provi
   const volume24h = volumeAvailable ? Number(volumes.reduce((sum, value) => sum + Number(value), 0).toFixed(4)) : null;
   return {
     symbol,
-    marketType: 'SPOT_OTC',
+    marketType: symbol === 'XAUUSD' ? 'SPOT_OTC' : 'FOREX_SPOT',
     source: SOURCE,
     provider: providerName,
     observedAt: quote?.observedAt ?? null,
@@ -262,12 +279,12 @@ function marketOverviewFromCandles(symbol, quote, candlesByTimeframe, now, provi
     low24h: lows.length ? Math.min(...lows) : null,
     volume24h,
     volumeStatus: volumeAvailable ? 'PROVIDER_TICK_VOLUME' : 'UNAVAILABLE_SPOT_VOLUME',
-    volumeNote: 'Spot XAU/USD has no single consolidated exchange volume; this is provider tick volume when supplied.',
+    volumeNote: `${symbol} spot markets have no single consolidated exchange volume; this is provider tick volume when supplied.`,
     derivatives: {
       fundingRate: null,
       openInterest: null,
       status: 'NOT_APPLICABLE',
-      reason: 'Funding rate and open interest are not spot XAU/USD fields.',
+      reason: `Funding rate and open interest are not ${symbol} spot-market fields.`,
     },
     history: {
       timeframe: 'M15',
@@ -317,7 +334,8 @@ export class TwelveDataMarketDataProvider {
     const quotes = {};
     for (const symbol of this.symbols) {
       const cached = this.#quoteCache.get(symbol);
-      if (cached && Date.now() - cached.fetchedAt < QUOTE_CACHE_MS) quotes[symbol] = cached.value;
+      if (cached && Date.now() - cached.fetchedAt < QUOTE_CACHE_MS
+        && quoteWithinCandleRange(this.#candleCache, symbol, cached.value)) quotes[symbol] = cached.value;
     }
     return quotes;
   }
@@ -345,7 +363,7 @@ export class TwelveDataMarketDataProvider {
         const body = await getJson(url, signal);
         for (const symbol of missing) {
           const quote = quoteFromResponse(responseForSymbol(body, symbol, missing.length), symbol, now);
-          if (quote) {
+          if (quote && quoteWithinCandleRange(this.#candleCache, symbol, quote)) {
             this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
             quotes[symbol] = quote;
           }
@@ -363,7 +381,7 @@ export class TwelveDataMarketDataProvider {
           singleUrl.search = new URLSearchParams({ symbol: providerSymbol(symbol), amount: '1', apikey: key, timezone: 'UTC' }).toString();
           const singleBody = await getJson(singleUrl, signal);
           const quote = quoteFromResponse(responseForSymbol(singleBody, symbol, 1), symbol, now);
-          if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+          if (!quote || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
           this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
           quotes[symbol] = quote;
           fallbackError = null;
@@ -378,7 +396,7 @@ export class TwelveDataMarketDataProvider {
       try {
         const body = await getJson(`https://biquote.io/api/${normalizedSymbol(symbol)}`, signal);
         const quote = quoteFromBiquote(body, symbol, now);
-        if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+        if (!quote || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
         this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
         quotes[symbol] = quote;
       } catch (error) {
@@ -391,7 +409,7 @@ export class TwelveDataMarketDataProvider {
         const url = `https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/${swissquoteInstrument(symbol)}`;
         const body = await getJson(url, signal);
         const quote = quoteFromSwissquote(body, symbol, now);
-        if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+        if (!quote || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
         this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
         quotes[symbol] = quote;
       } catch (error) {
@@ -399,6 +417,7 @@ export class TwelveDataMarketDataProvider {
       }
     }
     if (!quotes[PRIMARY_SYMBOL]) throw fallbackError ?? errorWithCode(configuredSpread() == null ? 'PAPER_SPREAD_NOT_CONFIGURED' : 'MARKET_DATA_QUOTE_INVALID');
+    if (this.symbols.some((symbol) => !quotes[symbol])) throw errorWithCode('MARKET_DATA_SYMBOLS_INCOMPLETE');
     this.#recordSuccess();
     return quotes;
   }
@@ -510,6 +529,7 @@ export class TwelveDataMarketDataProvider {
         quotes = await this.#readQuotes(now, signal);
       }
       const quote = quotes[PRIMARY_SYMBOL];
+      if (this.symbols.some((symbol) => !quotes[symbol])) throw errorWithCode('MARKET_DATA_SYMBOLS_INCOMPLETE');
       if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
       this.#startBackgroundFeed();
       const ageMs = now.getTime() - Date.parse(quote.observedAt);
@@ -525,7 +545,7 @@ export class TwelveDataMarketDataProvider {
     const errors = [];
     try {
       quotesBySymbol = this.#cachedQuotes(now);
-      if (!quotesBySymbol[PRIMARY_SYMBOL]) quotesBySymbol = await this.#readQuotes(now, signal);
+      if (!this.symbols.every((symbol) => quotesBySymbol[symbol])) quotesBySymbol = await this.#readQuotes(now, signal);
     } catch (error) {
       this.#recordFailure(error);
       throw error;
@@ -540,6 +560,18 @@ export class TwelveDataMarketDataProvider {
       } catch (error) {
         this.#recordFailure(error);
         errors.push({ symbol: PRIMARY_SYMBOL, reason: /^[A-Z][A-Z0-9_]{0,63}$/.test(error.code ?? '') ? error.code : 'MARKET_DATA_PROVIDER_ERROR' });
+      }
+    }
+    // Do not publish a quote before comparing it with the first verified
+    // candle batch. A provider can return a syntactically valid price without
+    // preserving the requested symbol, which would otherwise surface a
+    // cross-symbol quote for one worker cycle.
+    for (const symbol of this.symbols) {
+      const quote = quotesBySymbol[symbol];
+      if (quote && !quoteWithinCandleRange(this.#candleCache, symbol, quote)) {
+        this.#quoteCache.delete(symbol);
+        delete quotesBySymbol[symbol];
+        errors.push({ symbol, reason: 'MARKET_DATA_QUOTE_INVALID' });
       }
     }
     const candlesBySymbol = {};
@@ -569,6 +601,7 @@ export class TwelveDataMarketDataProvider {
         [...candleProviders].join(' + ') || 'TwelveData',
       );
     }
+    if (this.symbols.some((symbol) => !quotesBySymbol[symbol])) throw errorWithCode('MARKET_DATA_SYMBOLS_INCOMPLETE');
     if (!quotesBySymbol[PRIMARY_SYMBOL]) throw errorWithCode(this.#lastErrorCode ?? 'MARKET_DATA_QUOTE_UNAVAILABLE');
     return {
       source: SOURCE,
