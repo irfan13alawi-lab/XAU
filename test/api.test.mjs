@@ -877,6 +877,22 @@ test('market candle API returns only verified closed broker data and computes ac
   assert.equal(unsupported.status, 400);
 });
 
+test('read-only audit endpoint aliases remain compatible with the production checklist', async () => {
+  const [markets, candles, lastscan] = await Promise.all([
+    fetch(`${origin}/api/markets`),
+    fetch(`${origin}/api/candles?symbol=XAUUSD&timeframe=M15`),
+    fetch(`${origin}/api/lastscan`),
+  ]);
+  assert.equal(markets.status, 200);
+  assert.equal(candles.status, 200);
+  assert.equal(lastscan.status, 200);
+  assert.ok(Array.isArray(await markets.json()));
+  assert.equal((await candles.json()).source, 'BROKER');
+  const lastScanBody = await lastscan.json();
+  assert.equal(lastScanBody.status, 'WAITING');
+  assert.ok(Array.isArray(lastScanBody.reasons));
+});
+
 test('latest MTF API exposes persisted deterministic decision and timeframe evidence', async () => {
   const response = await fetch(`${origin}/api/mtf/latest`);
   const body = await response.json();

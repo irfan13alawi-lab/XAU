@@ -50,8 +50,10 @@ const OBSERVED_ROUTES = new Map([
   ['/bot/status', 'bot.status'],
   ['/api/dashboard', 'dashboard.api'],
   ['/api/market', 'market'],
+  ['/api/markets', 'markets'],
   ['/api/market/overview', 'market.overview'],
   ['/api/market/candles', 'market.candles'],
+  ['/api/candles', 'market.candles'],
   ['/api/mtf/latest', 'mtf.latest'],
   ['/api/news', 'news'],
   ['/api/positions', 'positions'],
@@ -61,6 +63,7 @@ const OBSERVED_ROUTES = new Map([
   ['/api/audit', 'audit'],
   ['/api/telemetry/worker', 'telemetry.worker'],
   ['/api/scan/latest', 'scan.latest'],
+  ['/api/lastscan', 'scan.latest'],
   ['/api/actions/pause', 'action.pause'],
   ['/api/actions/resume', 'action.resume'],
   ['/api/actions/scan', 'action.scan'],
@@ -880,10 +883,13 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
       if (method === 'GET' && url.pathname === '/api/market') {
         return jsonResponse(res, 200, dashboardSnapshot(db, now).market);
       }
+      if (method === 'GET' && url.pathname === '/api/markets') {
+        return jsonResponse(res, 200, dashboardSnapshot(db, now).markets);
+      }
       if (method === 'GET' && url.pathname === '/api/market/overview') {
         return jsonResponse(res, 200, dashboardSnapshot(db, now).market);
       }
-      if (method === 'GET' && url.pathname === '/api/market/candles') {
+      if (method === 'GET' && ['/api/market/candles', '/api/candles'].includes(url.pathname)) {
         const timeframe = url.searchParams.get('timeframe') ?? 'M15';
         const symbol = String(url.searchParams.get('symbol') ?? 'XAUUSD').trim().toUpperCase();
         if (!Object.hasOwn(TIMEFRAME_MS, timeframe)) {
@@ -954,7 +960,7 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
         const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 25)));
         return jsonResponse(res, 200, auditEvents(db, Number.isFinite(limit) ? limit : 25));
       }
-      if (method === 'GET' && url.pathname === '/api/scan/latest') {
+      if (method === 'GET' && ['/api/scan/latest', '/api/lastscan'].includes(url.pathname)) {
         return jsonResponse(res, 200, dashboardSnapshot(db, now).lastScan);
       }
       if (method === 'GET' && url.pathname.startsWith('/api/')) {
