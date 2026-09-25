@@ -582,6 +582,7 @@ export function dashboardSnapshot(db, now = new Date()) {
       reason: latestMarket ? latestMarketDetails.reason ?? null : marketDataHealth.reason ?? reason,
     },
     symbols: config.symbols,
+    tradeSymbols: config.tradeSymbols,
     markets: marketWatchlistSnapshot(db, now),
     news: { status: newsFresh ? 'HEALTHY' : news.status === 'HEALTHY' ? 'STALE' : news.status, source: news.source, fetchedAt: news.fetchedAt, reason: newsFresh ? null : news.reason },
     account: {
