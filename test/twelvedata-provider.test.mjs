@@ -149,6 +149,58 @@ test('health keeps the last complete quote set during a partial background refre
   }
 });
 
+test('background refresh aborts a stalled provider request and can recover on the next cycle', async () => {
+  const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
+  const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
+  const previousFetch = globalThis.fetch;
+  const previousSetInterval = globalThis.setInterval;
+  process.env.NEXORA_TWELVEDATA_API_KEY = 'test-key-not-a-credential';
+  process.env.NEXORA_PAPER_SPREAD_PRICE = '0.20';
+  const now = new Date('2026-09-22T00:00:00.000Z');
+  let backgroundTick = null;
+  let stalled = false;
+  globalThis.setInterval = (callback) => {
+    backgroundTick = callback;
+    return { unref() {} };
+  };
+  globalThis.fetch = async (input, { signal } = {}) => {
+    if (stalled) {
+      await new Promise((resolve, reject) => {
+        if (signal?.aborted) return reject(new Error('aborted'));
+        signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      });
+    }
+    const url = new URL(input);
+    if (url.pathname.endsWith('/currency_conversion')) {
+      return new Response(JSON.stringify({ rate: '2030.50', timestamp: Math.floor(now.getTime() / 1000) }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ values: candleRows(now, 15, 120) }), { status: 200 });
+  };
+  try {
+    const { TwelveDataMarketDataProvider } = await import('../src/providers/twelvedata-market-provider.mjs');
+    const provider = new TwelveDataMarketDataProvider({ symbols: ['XAUUSD'], backgroundRefreshTimeoutMs: 20 });
+    await provider.readMarketData(now);
+    await provider.readHealth(now);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    stalled = true;
+    backgroundTick();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    stalled = false;
+    backgroundTick();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const recovered = await provider.readHealth(new Date(now.getTime() + 15_000));
+    assert.equal(recovered.status, 'HEALTHY');
+    provider.stop();
+  } finally {
+    if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
+    else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
+    if (previousSpread === undefined) delete process.env.NEXORA_PAPER_SPREAD_PRICE;
+    else process.env.NEXORA_PAPER_SPREAD_PRICE = previousSpread;
+    globalThis.fetch = previousFetch;
+    globalThis.setInterval = previousSetInterval;
+  }
+});
+
 test('market feed rejects a wrong-symbol primary quote instead of accepting a cross-symbol price', async () => {
   const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
   const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;

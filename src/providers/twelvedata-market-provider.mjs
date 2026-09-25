@@ -21,6 +21,11 @@ const DAY_MS = 24 * 60 * 60_000;
 // while leaving headroom under Twelve Data's per-minute credit limit.
 const CANDLE_CYCLE_MS = 2 * 60_000;
 const CANDLE_SETTLE_DELAY_MS = 2 * 60_000;
+// A background refresh must not hold the provider in-flight forever. The
+// worker health path is bounded separately, but without this deadline a
+// stalled provider request can prevent every later quote/candle refresh and
+// eventually let the last-known-good quote set age past its TTL.
+const BACKGROUND_REFRESH_TIMEOUT_MS = 20_000;
 const TIMEFRAME_NAMES = Object.freeze(Object.keys(TIMEFRAMES));
 
 function number(value) {
@@ -317,9 +322,11 @@ export class TwelveDataMarketDataProvider {
   #backgroundPrimingScheduled = false;
   #backgroundRefreshInFlight = false;
 
-  constructor({ symbols = config.symbols } = {}) {
+  constructor({ symbols = config.symbols, backgroundRefreshTimeoutMs = BACKGROUND_REFRESH_TIMEOUT_MS } = {}) {
     const normalized = [...new Set(symbols.map((symbol) => String(symbol).trim().toUpperCase()))];
     this.symbols = Object.freeze(normalized.includes(PRIMARY_SYMBOL) ? normalized : [PRIMARY_SYMBOL, ...normalized]);
+    this.backgroundRefreshTimeoutMs = Number.isFinite(Number(backgroundRefreshTimeoutMs))
+      ? Math.max(1, Number(backgroundRefreshTimeoutMs)) : BACKGROUND_REFRESH_TIMEOUT_MS;
   }
 
   #recordFailure(error) {
@@ -517,10 +524,13 @@ export class TwelveDataMarketDataProvider {
   async #refreshBackgroundFeed() {
     if (this.#backgroundRefreshInFlight) return;
     this.#backgroundRefreshInFlight = true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.backgroundRefreshTimeoutMs);
+    timeout.unref?.();
     const now = new Date();
     try {
       try {
-        await this.#readQuotes(now, undefined, { force: true });
+        await this.#readQuotes(now, controller.signal, { force: true });
       } catch (error) {
         this.#recordFailure(error);
       }
@@ -529,12 +539,13 @@ export class TwelveDataMarketDataProvider {
         this.#candleCursor += 1;
         this.#lastCandleCycleAt = Date.now();
         try {
-          await this.#readCandleBatch(timeframe, now);
+          await this.#readCandleBatch(timeframe, now, controller.signal);
         } catch (error) {
           this.#recordFailure(error);
         }
       }
     } finally {
+      clearTimeout(timeout);
       this.#backgroundRefreshInFlight = false;
     }
   }
