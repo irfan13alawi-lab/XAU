@@ -97,6 +97,58 @@ test('Twelve Data adapter batches the four-symbol watchlist and advances one can
   }
 });
 
+test('health keeps the last complete quote set during a partial background refresh', async () => {
+  const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
+  const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
+  const previousFetch = globalThis.fetch;
+  const previousSetInterval = globalThis.setInterval;
+  process.env.NEXORA_TWELVEDATA_API_KEY = 'test-key-not-a-credential';
+  process.env.NEXORA_PAPER_SPREAD_PRICE = '0.20';
+  const now = new Date('2026-09-22T00:00:00.000Z');
+  const symbols = ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY'];
+  let backgroundTick = null;
+  let blockRefresh = false;
+  let releaseRefresh;
+  const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+  globalThis.setInterval = (callback) => {
+    backgroundTick = callback;
+    return { unref() {} };
+  };
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (blockRefresh && url.pathname.endsWith('/currency_conversion')) await refreshGate;
+    if (url.pathname.endsWith('/currency_conversion')) {
+      return new Response(JSON.stringify(Object.fromEntries(symbols.map((symbol, index) => [symbol.replace(/(XAU|EUR|GBP|USD)(USD|JPY)/, '$1/$2'), {
+        rate: String(2000 + index), timestamp: Math.floor(now.getTime() / 1000),
+      }]))), { status: 200 });
+    }
+    return new Response(JSON.stringify({ values: candleRows(now, 15, 120) }), { status: 200 });
+  };
+  try {
+    const { TwelveDataMarketDataProvider } = await import('../src/providers/twelvedata-market-provider.mjs');
+    const provider = new TwelveDataMarketDataProvider({ symbols });
+    await provider.readMarketData(now);
+    const initialHealth = await provider.readHealth(now);
+    assert.equal(initialHealth.status, 'HEALTHY');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    blockRefresh = true;
+    backgroundTick();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const duringRefresh = await provider.readHealth(new Date(now.getTime() + 15_000));
+    assert.equal(duringRefresh.status, 'HEALTHY');
+    releaseRefresh();
+    provider.stop();
+  } finally {
+    releaseRefresh();
+    if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
+    else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
+    if (previousSpread === undefined) delete process.env.NEXORA_PAPER_SPREAD_PRICE;
+    else process.env.NEXORA_PAPER_SPREAD_PRICE = previousSpread;
+    globalThis.fetch = previousFetch;
+    globalThis.setInterval = previousSetInterval;
+  }
+});
+
 test('market feed rejects a wrong-symbol primary quote instead of accepting a cross-symbol price', async () => {
   const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
   const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;

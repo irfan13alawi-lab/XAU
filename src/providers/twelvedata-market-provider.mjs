@@ -305,6 +305,14 @@ export class TwelveDataMarketDataProvider {
   #candleCursor = 0;
   #lastEmittedCandleAt = new Map();
   #quoteNetworkAttempted = false;
+  // Keep a complete, last-known-good quote set separate from the per-symbol
+  // cache. Background refreshes update symbols progressively; exposing that
+  // in-progress partial set to the worker made health oscillate to
+  // MARKET_DATA_SYMBOLS_INCOMPLETE even while the previous complete set was
+  // still fresh. The snapshot is only published after every symbol passes
+  // validation, so this does not weaken fail-closed behavior.
+  #completeQuoteSnapshot = null;
+  #completeQuoteSnapshotFetchedAt = 0;
   #backgroundTimer = null;
   #backgroundPrimingScheduled = false;
   #backgroundRefreshInFlight = false;
@@ -330,7 +338,20 @@ export class TwelveDataMarketDataProvider {
     this.#marketDataRetryAt = 0;
   }
 
+  #publishCompleteQuoteSnapshot(quotes) {
+    if (!this.symbols.every((symbol) => quotes?.[symbol])) return;
+    this.#completeQuoteSnapshot = Object.fromEntries(
+      this.symbols.map((symbol) => [symbol, quotes[symbol]]),
+    );
+    this.#completeQuoteSnapshotFetchedAt = Date.now();
+  }
+
   #cachedQuotes(now) {
+    if (this.#completeQuoteSnapshot
+      && Date.now() - this.#completeQuoteSnapshotFetchedAt < QUOTE_CACHE_MS
+      && this.symbols.every((symbol) => quoteWithinCandleRange(this.#candleCache, symbol, this.#completeQuoteSnapshot[symbol]))) {
+      return { ...this.#completeQuoteSnapshot };
+    }
     const quotes = {};
     for (const symbol of this.symbols) {
       const cached = this.#quoteCache.get(symbol);
@@ -418,6 +439,7 @@ export class TwelveDataMarketDataProvider {
     }
     if (!quotes[PRIMARY_SYMBOL]) throw fallbackError ?? errorWithCode(configuredSpread() == null ? 'PAPER_SPREAD_NOT_CONFIGURED' : 'MARKET_DATA_QUOTE_INVALID');
     if (this.symbols.some((symbol) => !quotes[symbol])) throw errorWithCode('MARKET_DATA_SYMBOLS_INCOMPLETE');
+    this.#publishCompleteQuoteSnapshot(quotes);
     this.#recordSuccess();
     return quotes;
   }
