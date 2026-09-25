@@ -485,11 +485,18 @@ test('positions API preserves last marks and redacts stored snapshots at the res
     'position-mark-malformed', 'order-mark-malformed', '2026-09-21T12:03:00.000Z',
     'NEXORA_MALFORMED_JSON_TEST_SENTINEL {',
   );
+  insertOrder.run('order-closed-position', 'order-closed-position-key');
+  insertPosition.run(
+    'position-closed', 'order-closed-position', '2026-09-21T12:04:00.000Z', '{}',
+  );
+  positionsDb.prepare("UPDATE positions SET status = 'CLOSED', closed_at = ? WHERE id = ?")
+    .run('2026-09-21T12:05:00.000Z', 'position-closed');
   try {
     const response = await fetch(`${positionsOrigin}/api/positions`);
     const body = await response.json();
     assert.equal(response.status, 200);
     assert.equal(body.length, 3);
+    assert.equal(body.some((position) => position.id === 'position-closed'), false);
     const validMark = body.find((position) => position.id === 'position-mark-valid');
     const futureMark = body.find((position) => position.id === 'position-mark-future');
     const malformedMark = body.find((position) => position.id === 'position-mark-malformed');

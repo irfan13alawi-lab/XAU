@@ -925,7 +925,16 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
         return jsonResponse(res, 200, { ...snapshot, events });
       }
       if (method === 'GET' && url.pathname === '/api/positions') {
-        return jsonResponse(res, 200, db.prepare(`SELECT * FROM positions ORDER BY opened_at DESC LIMIT 100`).all()
+        return jsonResponse(res, 200, db.prepare(`
+          SELECT id, order_id, symbol, side, status, quantity_open_lots, quantity_initial_lots,
+            entry_price, mark_price, stop_price, take_profit_1, take_profit_2, tp1_hit,
+            realized_pnl, unrealized_pnl, mfe, mae, opened_at, closed_at, close_reason,
+            snapshot_json, realized_gross_pnl, commission_paid, swap_paid,
+            initial_risk_amount, last_swap_at
+          FROM positions
+          WHERE status IN ('OPEN', 'PARTIAL')
+          ORDER BY opened_at DESC LIMIT 100
+        `).all()
           .map((position) => ({ ...position, lastMarkAt: positionLastMarkAt(position.snapshot_json, now) })));
       }
       if (method === 'GET' && url.pathname === '/api/orders') {
