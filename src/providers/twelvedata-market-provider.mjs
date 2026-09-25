@@ -435,27 +435,41 @@ export class TwelveDataMarketDataProvider {
       }
     }
     const biquoteUnresolved = missing.filter((symbol) => !quotes[symbol]);
-    for (const symbol of biquoteUnresolved) {
+    const biquoteResults = await Promise.all(biquoteUnresolved.map(async (symbol) => {
       try {
         const body = await getJson(`https://biquote.io/api/${normalizedSymbol(symbol)}`, signal);
         const quote = quoteFromBiquote(body, symbol, now);
         if (!quote || !quoteIsFresh(quote, now) || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+        return { symbol, quote, error: null };
+      } catch (error) {
+        return { symbol, quote: null, error };
+      }
+    }));
+    for (const { symbol, quote, error } of biquoteResults) {
+      if (quote) {
         this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
         quotes[symbol] = quote;
-      } catch (error) {
+      } else if (error) {
         fallbackError = error;
       }
     }
     const swissquoteUnresolved = missing.filter((symbol) => !quotes[symbol]);
-    for (const symbol of swissquoteUnresolved) {
+    const swissquoteResults = await Promise.all(swissquoteUnresolved.map(async (symbol) => {
       try {
         const url = `https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/${swissquoteInstrument(symbol)}`;
         const body = await getJson(url, signal);
         const quote = quoteFromSwissquote(body, symbol, now);
         if (!quote || !quoteIsFresh(quote, now) || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+        return { symbol, quote, error: null };
+      } catch (error) {
+        return { symbol, quote: null, error };
+      }
+    }));
+    for (const { symbol, quote, error } of swissquoteResults) {
+      if (quote) {
         this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
         quotes[symbol] = quote;
-      } catch (error) {
+      } else if (error) {
         fallbackError = error;
       }
     }
