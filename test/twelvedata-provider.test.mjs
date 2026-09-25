@@ -522,7 +522,7 @@ test('stale Twelve Data quotes fall back to a fresh Biquote quote', async () => 
     }
     if (url.hostname === 'biquote.io') {
       if (url.pathname.endsWith('/ohlc')) return new Response(JSON.stringify({ bars: [] }), { status: 200 });
-      return new Response(JSON.stringify({ symbol: url.pathname.split('/').at(-1), bid: '2030.40', ask: '2030.60', timestamp: now.toISOString(), stale: false }), { status: 200 });
+      return new Response(JSON.stringify({ symbol: url.pathname.split('/').at(-1), bid: '2030.40', ask: '2030.60', mid: '0.00000', timestamp: new Date(now.getTime() + 5_000).toISOString(), stale: false }), { status: 200 });
     }
     return new Response(JSON.stringify([]), { status: 200 });
   };

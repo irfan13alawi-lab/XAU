@@ -22,6 +22,7 @@ const DAY_MS = 24 * 60 * 60_000;
 const CANDLE_CYCLE_MS = 2 * 60_000;
 const CANDLE_SETTLE_DELAY_MS = 2 * 60_000;
 const PROVIDER_REQUEST_TIMEOUT_MS = 5_000;
+const MAX_QUOTE_FUTURE_SKEW_MS = 30_000;
 // A background refresh must not hold the provider in-flight forever. The
 // worker health path is bounded separately, but without this deadline a
 // stalled provider request can prevent every later quote/candle refresh and
@@ -116,6 +117,14 @@ function parseTimestamp(value) {
   return Number.isFinite(timestamp) ? new Date(timestamp) : null;
 }
 
+function normalizeObservedAt(value, now) {
+  const parsed = parseTimestamp(value);
+  if (!parsed) return now;
+  const futureMs = parsed.getTime() - now.getTime();
+  if (futureMs > MAX_QUOTE_FUTURE_SKEW_MS) return null;
+  return futureMs > 0 ? now : parsed;
+}
+
 function errorWithCode(code) {
   const error = new Error(code);
   error.code = code;
@@ -153,9 +162,9 @@ function quoteFromResponse(body, symbol, now, providerName = 'TwelveData') {
   const payload = body?.data && typeof body.data === 'object' && !Array.isArray(body.data) ? body.data : body;
   if (!quoteMatchesSymbol(payload, symbol)) return null;
   const mid = number(payload?.rate ?? payload?.value ?? payload?.price ?? payload?.close);
-  const observedAt = parseTimestamp(payload?.timestamp ?? payload?.datetime ?? payload?.last_quote_at) ?? now;
+  const observedAt = normalizeObservedAt(payload?.timestamp ?? payload?.datetime ?? payload?.last_quote_at, now);
   const spread = configuredSpread();
-  if (mid == null || mid <= 0 || spread == null) return null;
+  if (mid == null || mid <= 0 || spread == null || !observedAt) return null;
   const half = spread / 2;
   return {
     symbol,
@@ -181,8 +190,8 @@ function quoteFromSwissquote(body, symbol, now) {
   const bid = Number(selected.bid);
   const ask = Number(selected.ask);
   const mid = (bid + ask) / 2;
-  const observedAt = parseTimestamp(rows.map((row) => row?.ts).find((value) => value != null)) ?? now;
-  if (!Number.isFinite(mid) || mid <= 0) return null;
+  const observedAt = normalizeObservedAt(rows.map((row) => row?.ts).find((value) => value != null), now);
+  if (!Number.isFinite(mid) || mid <= 0 || !observedAt) return null;
   return {
     symbol,
     source: SOURCE,
@@ -198,10 +207,14 @@ function quoteFromBiquote(body, symbol, now) {
   if (!quoteMatchesSymbol(body, symbol)) return null;
   const bid = number(body?.bid);
   const ask = number(body?.ask);
-  const mid = number(body?.mid) ?? (bid != null && ask != null ? (bid + ask) / 2 : null);
-  const observedAt = parseTimestamp(body?.timestamp ?? body?.lastQuoteAt) ?? now;
+  const reportedMid = number(body?.mid);
+  // Biquote currently sends mid=0 while bid/ask are valid. Never let a
+  // non-positive convenience field discard a usable two-sided quote.
+  const mid = reportedMid != null && reportedMid > 0
+    ? reportedMid : (bid != null && ask != null ? (bid + ask) / 2 : null);
+  const observedAt = normalizeObservedAt(body?.timestamp ?? body?.lastQuoteAt, now);
   const spread = configuredSpread();
-  if (body?.stale === true || mid == null || mid <= 0 || spread == null) return null;
+  if (body?.stale === true || mid == null || mid <= 0 || spread == null || !observedAt) return null;
   const providerBookValid = bid != null && ask != null && bid > 0 && ask >= bid;
   const half = spread / 2;
   return {
