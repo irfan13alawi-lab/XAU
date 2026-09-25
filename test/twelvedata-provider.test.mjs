@@ -149,6 +149,52 @@ test('health keeps the last complete quote set during a partial background refre
   }
 });
 
+test('forced background refresh replaces cached quotes instead of republishing them', async () => {
+  const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
+  const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
+  const previousFetch = globalThis.fetch;
+  process.env.NEXORA_TWELVEDATA_API_KEY = 'test-key-not-a-credential';
+  process.env.NEXORA_PAPER_SPREAD_PRICE = '0.20';
+  const now = new Date();
+  let biquoteQuoteCalls = 0;
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === 'api.twelvedata.com') {
+      return new Response(JSON.stringify({ code: 429, status: 'error' }), { status: 200 });
+    }
+    if (url.hostname === 'biquote.io' && url.pathname.endsWith('/ohlc')) {
+      return new Response(JSON.stringify({ bars: [] }), { status: 200 });
+    }
+    if (url.hostname === 'biquote.io' && url.pathname.endsWith('/XAUUSD')) {
+      biquoteQuoteCalls += 1;
+      const mid = 2000 + biquoteQuoteCalls;
+      return new Response(JSON.stringify({
+        symbol: 'XAUUSD', bid: mid - 0.1, ask: mid + 0.1, mid,
+        quoteAgeSeconds: 0, stale: false,
+      }), { status: 200 });
+    }
+    throw new Error(`Unexpected URL: ${url.href}`);
+  };
+  try {
+    const { TwelveDataMarketDataProvider } = await import('../src/providers/twelvedata-market-provider.mjs');
+    const provider = new TwelveDataMarketDataProvider({ symbols: ['XAUUSD'] });
+    const initial = await provider.readMarketData(now);
+    assert.equal(initial.quote.last, 2001);
+    await provider.readHealth(now);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const refreshed = await provider.readMarketData(new Date());
+    assert.equal(refreshed.quote.last, 2002);
+    assert.ok(biquoteQuoteCalls >= 2);
+    provider.stop();
+  } finally {
+    if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
+    else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
+    if (previousSpread === undefined) delete process.env.NEXORA_PAPER_SPREAD_PRICE;
+    else process.env.NEXORA_PAPER_SPREAD_PRICE = previousSpread;
+    globalThis.fetch = previousFetch;
+  }
+});
+
 test('background refresh aborts a stalled provider request and can recover on the next cycle', async () => {
   const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
   const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;

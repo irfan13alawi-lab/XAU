@@ -424,7 +424,10 @@ export class TwelveDataMarketDataProvider {
     // Twelve Data accepts comma-separated symbols on currency_conversion. One
     // batched request keeps the four-symbol watchlist within the provider's
     // per-minute budget while preserving one normalized quote per symbol.
-    const quotes = { ...cachedQuotes };
+    // A forced refresh must not treat the previous snapshot as resolved. If
+    // cached symbols remain here, every fallback branch skips them and the
+    // background timer republishes the same five-minute-old quote forever.
+    const quotes = force ? {} : { ...cachedQuotes };
     let batchQuoteRejected = false;
     let fallbackError = key ? null : errorWithCode('TWELVEDATA_API_KEY_MISSING');
     if (twelveDataAllowed) {
