@@ -390,6 +390,7 @@ export class TwelveDataMarketDataProvider {
     // batched request keeps the four-symbol watchlist within the provider's
     // per-minute budget while preserving one normalized quote per symbol.
     const quotes = { ...cachedQuotes };
+    let batchQuoteRejected = false;
     let fallbackError = key ? null : errorWithCode('TWELVEDATA_API_KEY_MISSING');
     if (twelveDataAllowed) {
       const url = new URL('https://api.twelvedata.com/currency_conversion');
@@ -397,10 +398,13 @@ export class TwelveDataMarketDataProvider {
       try {
         const body = await getJson(url, signal);
         for (const symbol of missing) {
-          const quote = quoteFromResponse(responseForSymbol(body, symbol, missing.length), symbol, now);
+          const response = responseForSymbol(body, symbol, missing.length);
+          const quote = quoteFromResponse(response, symbol, now);
           if (quote && quoteIsFresh(quote, now) && quoteWithinCandleRange(this.#candleCache, symbol, quote)) {
             this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
             quotes[symbol] = quote;
+          } else if (response && typeof response === 'object') {
+            batchQuoteRejected = true;
           }
         }
       } catch (error) {
@@ -409,7 +413,11 @@ export class TwelveDataMarketDataProvider {
       }
     }
     const unresolved = missing.filter((symbol) => !quotes[symbol]);
-    if (twelveDataAllowed && fallbackError?.code !== 'MARKET_DATA_RATE_LIMITED') for (const symbol of unresolved) {
+    // A stale/invalid batch is already evidence that the primary quote
+    // response is unusable. Going through three more single-symbol Twelve
+    // Data endpoints per symbol only delays the known-good read-only
+    // fallback and can exhaust the health deadline during startup.
+    if (twelveDataAllowed && !batchQuoteRejected && fallbackError?.code !== 'MARKET_DATA_RATE_LIMITED') for (const symbol of unresolved) {
       for (const endpoint of ['currency_conversion', 'price', 'quote']) {
         try {
           const singleUrl = new URL(`https://api.twelvedata.com/${endpoint}`);
