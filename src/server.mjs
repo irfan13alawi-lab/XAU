@@ -455,7 +455,7 @@ export function dashboardSnapshot(db, now = new Date()) {
   const quarantinedEquitySnapshots = db.prepare(`SELECT COUNT(*) AS n FROM equity_snapshots WHERE accounting_status = 'QUARANTINED'`).get().n;
   const statistics = aggregateStats(db, now);
   const lastScan = db.prepare(`
-    SELECT id, started_at, completed_at, status, reason_json FROM scan_runs ORDER BY started_at DESC LIMIT 1
+    SELECT id, symbol, started_at, completed_at, status, reason_json FROM scan_runs ORDER BY started_at DESC LIMIT 1
   `).get() ?? null;
   const latestMarket = db.prepare(`
     SELECT symbol, source, status, bid, ask, last, observed_at, received_at, details_json
@@ -631,14 +631,21 @@ export function dashboardSnapshot(db, now = new Date()) {
     },
     positions,
     orders,
-    lastScan: lastScan ? {
-      ...lastScan,
-      reasons: parseJson(lastScan.reason_json, []),
-      ageMs: Number.isFinite(Date.parse(lastScan.completed_at ?? lastScan.started_at ?? ''))
-        ? Math.max(0, now.getTime() - Date.parse(lastScan.completed_at ?? lastScan.started_at)) : null,
-      isCurrent: Number.isFinite(Date.parse(lastScan.completed_at ?? lastScan.started_at ?? ''))
-        && now.getTime() - Date.parse(lastScan.completed_at ?? lastScan.started_at) <= 20 * 60_000,
-    } : null,
+    lastScan: lastScan ? (() => {
+      const reasons = parseJson(lastScan.reason_json, []);
+      const completedAt = Date.parse(lastScan.completed_at ?? lastScan.started_at ?? '');
+      const ageMs = Number.isFinite(completedAt) ? Math.max(0, now.getTime() - completedAt) : null;
+      const blockedByTransientData = reasons.some((reasonCode) => [
+        'MARKET_DATA_STALE', 'MARKET_DATA_NOT_FRESH', 'RISK_STATE_UNKNOWN', 'RISK_STATE_UNAVAILABLE',
+        'NEWS_DATA_STALE_OR_AMBIGUOUS', 'NEWS_SOURCE_UNAVAILABLE', 'BROKER_OFFLINE',
+      ].includes(reasonCode));
+      return {
+        ...lastScan,
+        reasons,
+        ageMs,
+        isCurrent: Number.isFinite(ageMs) && ageMs <= 20 * 60_000 && !blockedByTransientData,
+      };
+    })() : null,
     statistics,
   };
 }

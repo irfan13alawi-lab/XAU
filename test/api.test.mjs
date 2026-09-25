@@ -890,6 +890,7 @@ test('read-only audit endpoint aliases remain compatible with the production che
   assert.equal((await candles.json()).source, 'BROKER');
   const lastScanBody = await lastscan.json();
   assert.equal(lastScanBody.status, 'WAITING');
+  assert.equal(lastScanBody.symbol, 'XAUUSD');
   assert.ok(Array.isArray(lastScanBody.reasons));
 });
 
