@@ -208,6 +208,7 @@ test('worker ingests normalized data, applies news blackout, and scans a new clo
     assert.equal(second.telemetry.dependencies.newsCalendar.durationMs, null);
     assert.equal(second.telemetry.dependencies.newsCalendar.status, 'CACHED');
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM scan_runs').get().n, 1);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM broker_health').get().n, 1);
   } finally {
     db.close();
   }

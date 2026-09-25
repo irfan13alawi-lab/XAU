@@ -25,6 +25,7 @@ const TELEMETRY_ERROR_CLASSES = new Set([
 ]);
 const MARKET_SNAPSHOT_REFRESH_MS = 2 * 60_000;
 const SCAN_PROBE_INTERVAL_MS = 30_000;
+const BROKER_HEALTH_PERSIST_MS = 30_000;
 
 function elapsedMilliseconds(start, end) {
   const elapsed = Number(end) - Number(start);
@@ -492,25 +493,30 @@ function executionCosts(db, symbol = 'XAUUSD') {
   return readState(db, `paperCosts:${symbol}`, readState(db, 'paperCosts', null));
 }
 
-function persistHealth(db, health, now, previousState) {
+function persistHealth(db, health, now, previousState, lastPersistedAt = null) {
   const safeSource = providerLabel(health.source);
   const safeReason = reasonCode(health.reason, health.status === 'HEALTHY' ? null : 'PROVIDER_HEALTH_UNAVAILABLE');
-  db.prepare(`
-    INSERT INTO broker_health (source, status, checked_at, details_json) VALUES (?, ?, ?, ?)
-    `).run(safeSource, health.status, now.toISOString(), JSON.stringify({ reason: safeReason }));
   const nextState = `${safeSource}:${health.status}`;
-  if (nextState !== previousState) {
+  const stateChanged = nextState !== previousState;
+  const persistDue = lastPersistedAt == null || now.getTime() - lastPersistedAt >= BROKER_HEALTH_PERSIST_MS;
+  if (stateChanged || persistDue) {
+    db.prepare(`
+      INSERT INTO broker_health (source, status, checked_at, details_json) VALUES (?, ?, ?, ?)
+      `).run(safeSource, health.status, now.toISOString(), JSON.stringify({ reason: safeReason }));
+  }
+  if (stateChanged) {
     appendAudit(db, {
       eventType: 'BROKER_HEALTH_CHANGED', correlationId: randomUUID(), reason: safeReason ?? 'Provider health state changed.',
       metadata: { source: safeSource, status: health.status },
     }, now.toISOString());
   }
-  return nextState;
+  return { state: nextState, persistedAt: stateChanged || persistDue ? now.getTime() : lastPersistedAt };
 }
 
 export class PaperWorker {
   #timer = null;
   #lastHealthState = null;
+  #lastHealthPersistAt = null;
   #tickInFlight = false;
   #lastNewsAttemptAt = null;
   #telemetryPruneDue = true;
@@ -623,7 +629,9 @@ export class PaperWorker {
       dependencies.brokerHealth = {
         attempted: true, durationMs: elapsedMilliseconds(healthStartedAt, this.monotonicNow()), status: health.status,
       };
-      this.#lastHealthState = persistHealth(this.db, health, now, this.#lastHealthState);
+      const persistedHealth = persistHealth(this.db, health, now, this.#lastHealthState, this.#lastHealthPersistAt);
+      this.#lastHealthState = persistedHealth.state;
+      this.#lastHealthPersistAt = persistedHealth.persistedAt;
       let quote = null;
       let quotesBySymbol = {};
       let marketDataResult = null;
