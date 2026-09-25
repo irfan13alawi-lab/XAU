@@ -53,6 +53,13 @@ function quoteWithinCandleRange(candleCache, symbol, quote) {
   return Math.abs(value - baseline) / baseline <= 0.25;
 }
 
+function quoteIsFresh(quote, now) {
+  const observedAt = Date.parse(quote?.observedAt ?? '');
+  if (!Number.isFinite(observedAt)) return false;
+  const ageMs = now.getTime() - observedAt;
+  return ageMs >= 0 && ageMs <= MARKET_QUOTE_MAX_AGE_MS;
+}
+
 function apiKey() {
   return String(process.env.NEXORA_TWELVEDATA_API_KEY ?? '').trim();
 }
@@ -391,7 +398,7 @@ export class TwelveDataMarketDataProvider {
         const body = await getJson(url, signal);
         for (const symbol of missing) {
           const quote = quoteFromResponse(responseForSymbol(body, symbol, missing.length), symbol, now);
-          if (quote && quoteWithinCandleRange(this.#candleCache, symbol, quote)) {
+          if (quote && quoteIsFresh(quote, now) && quoteWithinCandleRange(this.#candleCache, symbol, quote)) {
             this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
             quotes[symbol] = quote;
           }
@@ -409,7 +416,7 @@ export class TwelveDataMarketDataProvider {
           singleUrl.search = new URLSearchParams({ symbol: providerSymbol(symbol), amount: '1', apikey: key, timezone: 'UTC' }).toString();
           const singleBody = await getJson(singleUrl, signal);
           const quote = quoteFromResponse(responseForSymbol(singleBody, symbol, 1), symbol, now);
-          if (!quote || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+          if (!quote || !quoteIsFresh(quote, now) || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
           this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
           quotes[symbol] = quote;
           fallbackError = null;
@@ -424,7 +431,7 @@ export class TwelveDataMarketDataProvider {
       try {
         const body = await getJson(`https://biquote.io/api/${normalizedSymbol(symbol)}`, signal);
         const quote = quoteFromBiquote(body, symbol, now);
-        if (!quote || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+        if (!quote || !quoteIsFresh(quote, now) || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
         this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
         quotes[symbol] = quote;
       } catch (error) {
@@ -437,7 +444,7 @@ export class TwelveDataMarketDataProvider {
         const url = `https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/${swissquoteInstrument(symbol)}`;
         const body = await getJson(url, signal);
         const quote = quoteFromSwissquote(body, symbol, now);
-        if (!quote || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
+        if (!quote || !quoteIsFresh(quote, now) || !quoteWithinCandleRange(this.#candleCache, symbol, quote)) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
         this.#quoteCache.set(symbol, { value: quote, fetchedAt: Date.now() });
         quotes[symbol] = quote;
       } catch (error) {

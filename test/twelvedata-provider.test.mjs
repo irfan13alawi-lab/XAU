@@ -505,3 +505,39 @@ test('market feed bypasses a Twelve Data rate limit with Biquote quotes and clos
     globalThis.fetch = previousFetch;
   }
 });
+
+test('stale Twelve Data quotes fall back to a fresh Biquote quote', async () => {
+  const previousKey = process.env.NEXORA_TWELVEDATA_API_KEY;
+  const previousSpread = process.env.NEXORA_PAPER_SPREAD_PRICE;
+  const previousFetch = globalThis.fetch;
+  process.env.NEXORA_TWELVEDATA_API_KEY = 'test-key-not-a-credential';
+  process.env.NEXORA_PAPER_SPREAD_PRICE = '0.20';
+  const now = new Date('2026-09-22T00:00:00.000Z');
+  const stale = new Date(now.getTime() - 10 * 60_000).toISOString();
+  globalThis.fetch = async (input) => {
+    const url = new URL(input);
+    if (url.hostname === 'api.twelvedata.com') {
+      if (url.pathname.endsWith('/time_series')) return new Response(JSON.stringify({ values: candleRows(now, 15, 120) }), { status: 200 });
+      return new Response(JSON.stringify({ rate: '2030.50', timestamp: stale }), { status: 200 });
+    }
+    if (url.hostname === 'biquote.io') {
+      if (url.pathname.endsWith('/ohlc')) return new Response(JSON.stringify({ bars: [] }), { status: 200 });
+      return new Response(JSON.stringify({ symbol: url.pathname.split('/').at(-1), bid: '2030.40', ask: '2030.60', timestamp: now.toISOString(), stale: false }), { status: 200 });
+    }
+    return new Response(JSON.stringify([]), { status: 200 });
+  };
+  try {
+    const { TwelveDataMarketDataProvider } = await import('../src/providers/twelvedata-market-provider.mjs');
+    const provider = new TwelveDataMarketDataProvider({ symbols: ['XAUUSD'] });
+    const payload = await provider.readMarketData(now);
+    assert.equal(payload.quote.provider, 'Biquote');
+    assert.equal(payload.quote.observedAt, now.toISOString());
+    provider.stop();
+  } finally {
+    if (previousKey === undefined) delete process.env.NEXORA_TWELVEDATA_API_KEY;
+    else process.env.NEXORA_TWELVEDATA_API_KEY = previousKey;
+    if (previousSpread === undefined) delete process.env.NEXORA_PAPER_SPREAD_PRICE;
+    else process.env.NEXORA_PAPER_SPREAD_PRICE = previousSpread;
+    globalThis.fetch = previousFetch;
+  }
+});
