@@ -212,7 +212,10 @@ function quoteFromBiquote(body, symbol, now) {
   // non-positive convenience field discard a usable two-sided quote.
   const mid = reportedMid != null && reportedMid > 0
     ? reportedMid : (bid != null && ask != null ? (bid + ask) / 2 : null);
-  const observedAt = normalizeObservedAt(body?.lastQuoteAt ?? body?.timestamp, now);
+  const providerAgeSeconds = number(body?.quoteAgeSeconds);
+  const observedAt = providerAgeSeconds != null && providerAgeSeconds >= 0
+    ? new Date(now.getTime() - providerAgeSeconds * 1000)
+    : normalizeObservedAt(body?.lastQuoteAt ?? body?.timestamp, now);
   const spread = configuredSpread();
   if (body?.stale === true || mid == null || mid <= 0 || spread == null || !observedAt) return null;
   const providerBookValid = bid != null && ask != null && bid > 0 && ask >= bid;
