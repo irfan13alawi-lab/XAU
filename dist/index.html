@@ -33,7 +33,7 @@
 
         <div class="side-label side-label-lower">SYSTEM</div>
         <div class="system-links">
-          <div class="nav-item muted"><span class="nav-icon">◉</span><span>Market feed: not configured</span></div>
+          <div class="nav-item muted"><span class="nav-icon">◉</span><span id="marketFeedNav">Market feed: checking</span></div>
           <div class="nav-item muted"><span class="nav-icon">⌘</span><span>Audit: local SQLite</span></div>
             <div class="nav-item muted"><span class="nav-icon">➤</span><span id="telegramStatus">Telegram: disabled</span></div>
         </div>
@@ -82,17 +82,17 @@
             <article class="metric-card">
               <div class="metric-top"><span>Paper balance</span><span class="metric-kicker" id="accountCurrencyKicker">—</span></div>
               <div class="metric-value" data-metric="balance">—</div>
-              <div class="metric-foot neutral">No verified account snapshot</div>
+              <div class="metric-foot neutral" id="balanceFoot">Paper equity snapshot unavailable</div>
             </article>
             <article class="metric-card">
               <div class="metric-top"><span>Daily PnL</span><span class="metric-kicker">TODAY</span></div>
               <div class="metric-value" data-metric="daily-pnl">—</div>
-              <div class="metric-foot neutral">No closed paper trades</div>
+              <div class="metric-foot neutral" id="dailyPnlFoot">No closed paper trades today</div>
             </article>
             <article class="metric-card">
               <div class="metric-top"><span>Current drawdown</span><span class="metric-kicker" id="drawdownWarningThreshold">WARNING —</span></div>
               <div class="metric-value" data-metric="drawdown">—</div>
-              <div class="metric-foot neutral">Unavailable until equity snapshots exist</div>
+              <div class="metric-foot neutral" id="drawdownFoot">Unavailable until a fresh risk snapshot exists</div>
             </article>
             <article class="metric-card">
               <div class="metric-top"><span>Open positions</span><span class="metric-kicker">PAPER</span></div>

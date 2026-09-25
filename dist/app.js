@@ -54,6 +54,20 @@
     });
   }
 
+  function createIdempotencyKey() {
+    const webCrypto = globalThis.crypto;
+    if (typeof webCrypto?.randomUUID === 'function') return webCrypto.randomUUID();
+    if (typeof webCrypto?.getRandomValues === 'function') {
+      const bytes = new Uint8Array(16);
+      webCrypto.getRandomValues(bytes);
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    }
+    return `nexora-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
+  }
+
   function makeElement(tag, className, text) {
     const element = document.createElement(tag);
     if (className) element.className = className;
@@ -68,7 +82,7 @@
     }
     if (options.method && options.method !== 'GET') {
       headers.set('Content-Type', 'application/json');
-      if (!headers.has('Idempotency-Key')) headers.set('Idempotency-Key', crypto.randomUUID());
+      if (!headers.has('Idempotency-Key')) headers.set('Idempotency-Key', createIdempotencyKey());
     }
     const callerSignal = options.signal;
     const controller = new AbortController();
@@ -154,8 +168,10 @@
       : Number(market.overview.volume24h).toLocaleString('en-US'));
     setText('#marketDerivatives', market?.overview?.derivatives?.status === 'NOT_APPLICABLE' ? 'N/A · spot XAU' : 'UNAVAILABLE');
     setText('[data-market="freshness"]', market?.dataFreshness ?? 'UNAVAILABLE');
-    setText('#marketSource', `${market?.activeProvider ?? market?.source ?? 'none'} · VPS read-only proxy · ${market?.reason ?? 'No verified feed'}`);
-    setText('#marketBadge', market?.status === 'BROKER' ? 'BROKER DATA' : market?.status ?? 'NO FEED');
+    const provider = market?.activeProvider ?? market?.source ?? 'none';
+    const feedReady = market?.dataFreshness === 'FRESH';
+    setText('#marketSource', `${provider} · VPS read-only proxy · ${market?.reason ?? (feedReady ? 'Verified quote · FRESH' : 'Feed not ready')}`);
+    setText('#marketBadge', feedReady ? 'READ-ONLY FEED' : market?.status ?? 'NO FEED');
     setText('#candleTimestamp', market?.lastClosedCandleAt ? `Closed ${timeOf(market.lastClosedCandleAt)}` : 'No closed candle received');
     setText('#chartEmpty', market?.quote ? 'Quote received · waiting for verified closed candles.' : 'Connect a verified market-data feed to display candles.');
     setText('#marketSession', market?.session?.active?.length ? market.session.active.join(' + ')
@@ -626,11 +642,19 @@
     const counts = data.counts ?? {};
     const control = data.control ?? {};
     const telegram = data.telegram ?? {};
+    const paperMarketFeedConnected = data.market?.dataFreshness === 'FRESH'
+      && ['BROKER', 'MARKET_DATA'].includes(data.market?.source);
     setText('#apiStatusLabel', 'SERVICE ONLINE');
     setText('#telegramStatus', 'Telegram: ' + (telegram.enabled ? telegram.status ?? 'starting' : 'disabled'));
     if ($('#telegramStatus')) $('#telegramStatus').title = telegram.lastErrorCode
       ?? (telegram.notificationsEnabled ? String(telegram.pendingNotifications ?? 0) + ' queued notification(s).' : telegram.configured ? 'Bot configured; command access is allowlisted.' : 'No Telegram connection is enabled.');
-    setText('#sidebarStatus', data.worker?.running ? 'Worker running · feed offline' : 'Worker heartbeat unavailable');
+    const feedLabel = paperMarketFeedConnected
+      ? `${data.market?.activeProvider ?? 'market feed'} fresh`
+      : 'feed unavailable';
+    setText('#sidebarStatus', data.worker?.running ? `Worker running · ${feedLabel}` : 'Worker heartbeat unavailable');
+    setText('#marketFeedNav', paperMarketFeedConnected
+      ? `Market feed: ${data.market?.activeProvider ?? 'online'}`
+      : 'Market feed: unavailable');
     setText('#buildInfo', `BUILD ${data.app?.buildId ?? '—'} · SCHEMA ${data.app?.schemaVersion ?? '—'}`);
     setText('#serverClock', timeOf(data.generatedAt));
     setText('#liveBadge', trading.liveTradingEnabled ? 'LIVE ROUTE ERROR' : 'LIVE DISABLED');
@@ -661,7 +685,9 @@
         ? 'Local SQLite worker-cycle history; this window is capped at the most recent 6,000 samples.'
         : 'Local SQLite worker-cycle history for the last hour; diagnostic latency, not broker execution evidence.';
     }
-    setText('#brokerHealth', broker.status ?? 'OFFLINE');
+    setText('#brokerHealth', paperMarketFeedConnected && !broker.connected
+      ? `PAPER FEED · ${data.market?.activeProvider ?? 'MARKET DATA'} FRESH`
+      : broker.status ?? 'OFFLINE');
     setText('#newsHealth', data.news?.status === 'HEALTHY' ? 'HEALTHY' : `${data.news?.status ?? 'UNKNOWN'} · ENTRY BLOCKED`);
     setText('#scanStatus', data.lastScan
       ? `${data.lastScan.status} · ${timeOf(data.lastScan.completed_at)}${data.lastScan.isCurrent === false ? ' · historical' : ''}`
@@ -713,8 +739,17 @@
     setText('#safetyState', trading.entriesAllowed ? 'PAPER GUARDS ACTIVE' : 'FAIL-CLOSED');
     setText('#accountCurrencyKicker', account.currency ?? '—');
     setText('[data-metric="balance"]', account.balance == null || !account.currency ? '—' : money(account.balance, account.currency));
+    setText('#balanceFoot', account.balance == null
+      ? 'Paper equity snapshot unavailable'
+      : `Paper snapshot · ${timeOf(data.paperEquity?.observedAt)}`);
     setText('[data-metric="daily-pnl"]', account.dailyPnl == null || !account.currency ? '—' : money(account.dailyPnl, account.currency));
+    setText('#dailyPnlFoot', account.dailyPnl == null
+      ? Number(counts.validClosedTrades ?? 0) > 0 ? `No closed trades today · ${counts.validClosedTrades} valid overall` : 'No closed paper trades today'
+      : 'Realized paper PnL for today');
     setText('[data-metric="drawdown"]', percent(risk.drawdownPct));
+    setText('#drawdownFoot', risk.freshness === 'FRESH'
+      ? `Risk snapshot · ${timeOf(risk.updatedAt)}`
+      : 'Unavailable until a fresh risk snapshot exists');
     setText('[data-metric="positions"]', counts.openPositions ?? 0);
     setText('#riskPerTrade', percent(risk.limits?.riskPerTradePct));
     setText('#maxTotalRisk', percent(risk.limits?.maxTotalOpenRiskPct));
@@ -742,7 +777,7 @@
     renderPositions(data.positions, data.orders, Boolean(data.control?.operatorAuthenticated), data.market?.dataFreshness === 'FRESH');
     renderAudit(audit);
     renderJournal(data.statistics, counts.closedTrades ?? 0);
-    const online = broker.connected === true;
+    const online = broker.connected === true || paperMarketFeedConnected;
     for (const selector of ['#apiStatusDot', '#sidebarStatusDot', '#workerDot']) {
       $(selector)?.classList.toggle('green', online && data.worker?.running === true);
       $(selector)?.classList.toggle('amber', !(online && data.worker?.running === true));
@@ -752,8 +787,6 @@
       pauseButton.classList.toggle('paused', Boolean(trading.entryPaused));
       const readinessReasons = [];
       if (!data.worker?.running) readinessReasons.push('worker not ready');
-      const paperMarketFeedConnected = data.market?.dataFreshness === 'FRESH'
-        && ['BROKER', 'MARKET_DATA'].includes(data.market?.source);
       if (!broker.connected && !paperMarketFeedConnected) readinessReasons.push('broker offline');
       if (data.market?.dataFreshness !== 'FRESH') readinessReasons.push('fresh market quote unavailable');
       if (data.market?.candleFreshness !== 'FRESH') readinessReasons.push('fresh M15 candle unavailable');

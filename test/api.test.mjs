@@ -345,6 +345,10 @@ test('static dashboard shell and bundle expose honest risk state and responsive 
   assert.match(js, /risk state unavailable or stale/);
   assert.match(js, /\/api\/actions\/research/);
   assert.match(js, /\/api\/actions\/close/);
+  assert.match(js, /function createIdempotencyKey\(\)/);
+  assert.doesNotMatch(js, /crypto\.randomUUID\(\)/);
+  assert.match(js, /marketFeedNav/);
+  assert.match(js, /Paper equity snapshot unavailable/);
   assert.match(js, /const API_REQUEST_TIMEOUT_MS = 8_000/);
   assert.match(js, /controller\.abort\(\)/);
   assert.match(js, /if \(controller\.signal\.aborted\) throw error/);
