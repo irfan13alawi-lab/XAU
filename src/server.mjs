@@ -407,7 +407,7 @@ function marketWatchlistSnapshot(db, now = new Date()) {
     return {
       symbol,
       source: latest?.source ?? 'none',
-      activeProvider: details.provider ?? details.marketOverview?.provider ?? 'none',
+      activeProvider: details.marketOverview?.provider ?? details.provider ?? 'none',
       status: latest?.status ?? 'UNAVAILABLE',
       dataFreshness: fresh ? 'FRESH' : latest ? 'STALE' : 'UNAVAILABLE',
       quote: latest ? { bid: latest.bid, ask: latest.ask, last: latest.last, observedAt: latest.observed_at } : null,
@@ -461,8 +461,8 @@ export function dashboardSnapshot(db, now = new Date()) {
   const marketDataHealth = readState(db, 'marketDataHealth', { status: 'UNAVAILABLE', reason: null });
   const latestMarketDetails = parseJson(latestMarket?.details_json, {}) ?? {};
   const healthDetails = parseJson(health.details_json, {}) ?? {};
-  const activeProvider = latestMarketDetails.provider
-    ?? latestMarketDetails.marketOverview?.provider
+  const activeProvider = latestMarketDetails.marketOverview?.provider
+    ?? latestMarketDetails.provider
     ?? healthDetails.activeProviders?.[0]
     ?? healthDetails.provider
     ?? config.marketSource;
