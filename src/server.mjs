@@ -496,6 +496,7 @@ export function dashboardSnapshot(db, now = new Date()) {
   });
   const reason = healthDetails.reason ?? null;
   const brokerOnline = health.status === 'HEALTHY';
+  const executionDataReady = brokerOnline || paperMarketFeedConnected;
   const entryPaused = readState(db, 'entryPaused', true);
   const paperMode = readState(db, 'paperMode', config.paperMode);
   const riskBlocked = riskState.freshness !== 'FRESH' || !riskGuard.allowed;
@@ -596,7 +597,7 @@ export function dashboardSnapshot(db, now = new Date()) {
       updatedAt: riskState.updatedAt,
       reasons: riskState.freshness === 'FRESH' ? riskGuard.reasons : [riskState.reason ?? 'RISK_STATE_UNAVAILABLE'],
       status: riskState.freshness !== 'FRESH' ? 'RISK STATE UNAVAILABLE'
-        : !riskGuard.allowed ? 'RISK GUARD TRIPPED' : brokerOnline ? 'CHECKS REQUIRED' : 'ENTRY BLOCKED',
+        : !riskGuard.allowed ? 'RISK GUARD TRIPPED' : executionDataReady ? 'CHECKS REQUIRED' : 'ENTRY BLOCKED',
     },
     paperEquity,
     worker: {
