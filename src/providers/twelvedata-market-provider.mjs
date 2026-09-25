@@ -649,6 +649,14 @@ export class TwelveDataMarketDataProvider {
       if (this.symbols.some((symbol) => !quotes[symbol])) throw errorWithCode('MARKET_DATA_SYMBOLS_INCOMPLETE');
       if (!quote) throw errorWithCode('MARKET_DATA_QUOTE_INVALID');
       this.#startBackgroundFeed();
+      // Do not rely solely on the unref'd provider timer for liveness. The
+      // worker already checks health every 15 seconds, so use that heartbeat
+      // to kick a due refresh without waiting for the five-minute TTL. This
+      // keeps normal ticks local/cache-only while recovering promptly when a
+      // timer callback or one provider attempt is missed.
+      const quoteRefreshDue = this.#completeQuoteSnapshotFetchedAt > 0
+        && Date.now() - this.#completeQuoteSnapshotFetchedAt >= CANDLE_CYCLE_MS;
+      if (quoteRefreshDue) void this.#refreshBackgroundFeed();
       const ageMs = now.getTime() - Date.parse(quote.observedAt);
       return { source: SOURCE, status: ageMs >= 0 && ageMs <= MARKET_QUOTE_MAX_AGE_MS ? 'HEALTHY' : 'STALE', checkedAt: now.toISOString(), reason: ageMs <= MARKET_QUOTE_MAX_AGE_MS ? null : 'MARKET_DATA_QUOTE_STALE' };
     } catch (error) {
