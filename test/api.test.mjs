@@ -110,6 +110,18 @@ test('health separates process liveness from market readiness', async () => {
   assert.equal(body.worker.lastTick, null);
 });
 
+test('weekend market closure is reported as an expected safe state', () => {
+  const snapshot = dashboardSnapshot(db, new Date('2026-09-26T12:00:00.000Z'));
+  assert.equal(snapshot.market.session.marketScheduleStatus, 'WEEKEND_CLOSED');
+  assert.equal(snapshot.trading.state, 'MARKET CLOSED');
+  assert.equal(snapshot.trading.entriesAllowed, false);
+  assert.equal(snapshot.broker.status, 'CLOSED');
+  assert.equal(snapshot.broker.reason, 'MARKET_CLOSED');
+  assert.equal(snapshot.market.reason, 'MARKET_CLOSED');
+  assert.ok(snapshot.markets.every((market) => market.status === 'CLOSED'));
+  assert.ok(snapshot.markets.every((market) => market.reason === 'MARKET_CLOSED'));
+});
+
 test('HTTP responses expose request IDs and logs use safe low-cardinality fields', async () => {
   const records = [];
   const requestServer = createNexoraServer({

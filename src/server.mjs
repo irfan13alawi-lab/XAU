@@ -398,6 +398,7 @@ function marketCandlesSnapshot(db, timeframe, now = new Date(), symbol = 'XAUUSD
 }
 
 function marketWatchlistSnapshot(db, now = new Date()) {
+  const weekendClosed = activeSessions(now).marketScheduleStatus === 'WEEKEND_CLOSED';
   return config.symbols.map((symbol) => {
     const latest = db.prepare(`
       SELECT symbol, source, status, bid, ask, last, observed_at, received_at, details_json
@@ -418,7 +419,7 @@ function marketWatchlistSnapshot(db, now = new Date()) {
       symbol,
       source: latest?.source ?? 'none',
       activeProvider: details.marketOverview?.provider ?? details.provider ?? 'none',
-      status: latest?.status ?? 'UNAVAILABLE',
+      status: weekendClosed && !fresh ? 'CLOSED' : latest?.status ?? 'UNAVAILABLE',
       dataFreshness: fresh ? 'FRESH' : latest ? 'STALE' : 'UNAVAILABLE',
       quote: latest ? { bid: latest.bid, ask: latest.ask, last: latest.last, observedAt: latest.observed_at } : null,
       overview: marketOverview(latest),
@@ -427,7 +428,7 @@ function marketWatchlistSnapshot(db, now = new Date()) {
       candleFreshness: candleDataFreshness(lastCandle, 'M15', now),
       candleSource: lastCandle?.source ?? null,
       candleQuality: lastCandle?.quality ?? null,
-      reason: latest ? details.reason ?? null : 'NO_MARKET_SNAPSHOT',
+      reason: weekendClosed && !fresh ? 'MARKET_CLOSED' : latest ? details.reason ?? null : 'NO_MARKET_SNAPSHOT',
     };
   });
 }
@@ -505,19 +506,24 @@ export function dashboardSnapshot(db, now = new Date()) {
     limits: config.risk,
   });
   const reason = healthDetails.reason ?? null;
+  const session = activeSessions(now);
+  const weekendClosed = session.marketScheduleStatus === 'WEEKEND_CLOSED';
+  const marketClosed = weekendClosed && !marketFresh;
   const brokerOnline = health.status === 'HEALTHY';
   const executionDataReady = brokerOnline || paperMarketFeedConnected;
   const entryPaused = readState(db, 'entryPaused', true);
   const paperMode = readState(db, 'paperMode', config.paperMode);
   const riskBlocked = riskState.freshness !== 'FRESH' || !riskGuard.allowed;
-  const botState = !brokerOnline && !paperMarketFeedConnected ? 'BROKER OFFLINE'
+  const botState = marketClosed ? 'MARKET CLOSED'
+    : !brokerOnline && !paperMarketFeedConnected ? 'BROKER OFFLINE'
     : !marketFresh ? latestMarket ? 'DATA STALE' : 'PAPER CHECKING'
       : candleFreshness !== 'FRESH' ? 'CANDLE DATA BLOCKED'
         : !newsFresh ? 'NEWS UNAVAILABLE'
           : !paperMode ? 'MONITORING ONLY'
           : entryPaused || riskBlocked ? 'ENTRY PAUSED'
             : !workerReady ? 'PAPER CHECKING' : 'PAPER ON';
-  const stateReason = !brokerOnline && !paperMarketFeedConnected ? reason
+  const stateReason = marketClosed ? 'The market is closed for the weekend; entries remain safely blocked until verified quotes and candles resume.'
+    : !brokerOnline && !paperMarketFeedConnected ? reason
     : !marketFresh ? 'Verified fresh broker quote is unavailable.'
       : candleFreshness !== 'FRESH' ? 'Verified closed M15 candle data is unavailable or stale; entries fail closed.'
         : !newsFresh ? news.reason ?? 'News calendar is unavailable or stale; entries fail closed.'
@@ -554,18 +560,18 @@ export function dashboardSnapshot(db, now = new Date()) {
       name: activeProvider === 'none' ? 'Not selected' : activeProvider,
       source: health.source,
       connected: brokerOnline,
-      status: health.status,
+      status: marketClosed ? 'CLOSED' : health.status,
       // The worker heartbeat is the current health-check cadence. The
       // broker_health table is intentionally transition-based, so its row is
       // not rewritten on every unchanged 15-second check.
       checkedAt: workerReady ? heartbeatAt : health.checked_at,
-      reason,
+      reason: marketClosed ? 'MARKET_CLOSED' : reason,
     },
     market: {
       symbol: 'XAUUSD',
       source: latestMarket?.source ?? health.source,
       activeProvider,
-      status: latestMarket?.status ?? marketDataHealth.status ?? 'UNAVAILABLE',
+      status: marketClosed ? 'CLOSED' : latestMarket?.status ?? marketDataHealth.status ?? 'UNAVAILABLE',
       dataFreshness: marketFresh ? 'FRESH' : latestMarket ? 'STALE' : 'UNAVAILABLE',
       candleFreshness,
       candleRequired: { timeframe: 'M15', maxAgeMs: TIMEFRAME_MS.M15 * 2 },
@@ -588,8 +594,8 @@ export function dashboardSnapshot(db, now = new Date()) {
       candleQuality: lastClosedCandle?.quality ?? null,
       spreadPrice: Number.isFinite(spreadPrice) && spreadPrice >= 0 ? spreadPrice : null,
       spreadPoints: Number.isFinite(spreadPrice) && Number(instrument?.tickSize) > 0 ? spreadPrice / Number(instrument.tickSize) : null,
-      session: activeSessions(now),
-      reason: latestMarket ? latestMarketDetails.reason ?? null : marketDataHealth.reason ?? reason,
+      session,
+      reason: marketClosed ? 'MARKET_CLOSED' : latestMarket ? latestMarketDetails.reason ?? null : marketDataHealth.reason ?? reason,
     },
     symbols: config.symbols,
     tradeSymbols: config.tradeSymbols,
@@ -665,11 +671,15 @@ function readinessReasons(snapshot) {
   const reasons = [];
   const paperMarketFeedConnected = snapshot.market?.dataFreshness === 'FRESH'
     && isAcceptedMarketSource(snapshot.market?.source);
+  const marketClosed = snapshot.market?.session?.marketScheduleStatus === 'WEEKEND_CLOSED';
   if (!snapshot.trading.paperMode) reasons.push('PAPER_MODE_DISABLED');
   if (!snapshot.worker.running) reasons.push('WORKER_NOT_READY');
-  if (!snapshot.broker.connected && !paperMarketFeedConnected) reasons.push('BROKER_OFFLINE');
-  if (snapshot.market.dataFreshness !== 'FRESH') reasons.push('MARKET_DATA_NOT_FRESH');
-  if (snapshot.market.candleFreshness !== 'FRESH') reasons.push('MARKET_CANDLES_NOT_FRESH');
+  if (marketClosed) reasons.push('MARKET_CLOSED');
+  else {
+    if (!snapshot.broker.connected && !paperMarketFeedConnected) reasons.push('BROKER_OFFLINE');
+    if (snapshot.market.dataFreshness !== 'FRESH') reasons.push('MARKET_DATA_NOT_FRESH');
+    if (snapshot.market.candleFreshness !== 'FRESH') reasons.push('MARKET_CANDLES_NOT_FRESH');
+  }
   if (snapshot.news.status !== 'HEALTHY') reasons.push('NEWS_NOT_READY');
   if (snapshot.risk.freshness !== 'FRESH') reasons.push('RISK_STATE_NOT_FRESH');
   else reasons.push(...snapshot.risk.reasons);
