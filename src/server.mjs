@@ -508,7 +508,7 @@ export function dashboardSnapshot(db, now = new Date()) {
   const reason = healthDetails.reason ?? null;
   const session = activeSessions(now);
   const weekendClosed = session.marketScheduleStatus === 'WEEKEND_CLOSED';
-  const marketClosed = weekendClosed && !marketFresh;
+  const marketClosed = weekendClosed;
   const brokerOnline = health.status === 'HEALTHY';
   const executionDataReady = brokerOnline || paperMarketFeedConnected;
   const entryPaused = readState(db, 'entryPaused', true);
@@ -560,18 +560,18 @@ export function dashboardSnapshot(db, now = new Date()) {
       name: activeProvider === 'none' ? 'Not selected' : activeProvider,
       source: health.source,
       connected: brokerOnline,
-      status: marketClosed ? 'CLOSED' : health.status,
+      status: health.status,
       // The worker heartbeat is the current health-check cadence. The
       // broker_health table is intentionally transition-based, so its row is
       // not rewritten on every unchanged 15-second check.
       checkedAt: workerReady ? heartbeatAt : health.checked_at,
-      reason: marketClosed ? 'MARKET_CLOSED' : reason,
+      reason,
     },
     market: {
       symbol: 'XAUUSD',
       source: latestMarket?.source ?? health.source,
       activeProvider,
-      status: marketClosed ? 'CLOSED' : latestMarket?.status ?? marketDataHealth.status ?? 'UNAVAILABLE',
+      status: latestMarket?.status ?? marketDataHealth.status ?? 'UNAVAILABLE',
       dataFreshness: marketFresh ? 'FRESH' : latestMarket ? 'STALE' : 'UNAVAILABLE',
       candleFreshness,
       candleRequired: { timeframe: 'M15', maxAgeMs: TIMEFRAME_MS.M15 * 2 },

@@ -115,8 +115,6 @@ test('weekend market closure is reported as an expected safe state', () => {
   assert.equal(snapshot.market.session.marketScheduleStatus, 'WEEKEND_CLOSED');
   assert.equal(snapshot.trading.state, 'MARKET CLOSED');
   assert.equal(snapshot.trading.entriesAllowed, false);
-  assert.equal(snapshot.broker.status, 'CLOSED');
-  assert.equal(snapshot.broker.reason, 'MARKET_CLOSED');
   assert.equal(snapshot.market.reason, 'MARKET_CLOSED');
   assert.ok(snapshot.markets.every((market) => market.status === 'CLOSED'));
   assert.ok(snapshot.markets.every((market) => market.reason === 'MARKET_CLOSED'));
