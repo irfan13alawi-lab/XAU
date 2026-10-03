@@ -733,7 +733,7 @@
     if (researchDatasetName) researchDatasetName.disabled = !control.operatorAuthenticated;
     const forwardTrades = Number(counts.forwardPaperTrades ?? 0);
     const forwardRequired = Number(counts.forwardPaperTradesRequired ?? 100);
-    setText('#forwardEvidenceSummary', `${forwardTrades} / ${forwardRequired} closed broker-fed paper trades · operational milestone only, not strategy validation.`);
+    setText('#forwardEvidenceSummary', `${forwardTrades} / ${forwardRequired} closed provider-fed paper trades · operational milestone only, not strategy validation.`);
     setText('#forwardEvidenceStatus', forwardTrades >= forwardRequired ? 'MILESTONE MET' : 'INCOMPLETE');
     setText('#safetyMessage', 'No live-order adapter is installed. This workspace is paper-only.');
     setText('#safetyState', trading.entriesAllowed ? 'PAPER GUARDS ACTIVE' : 'FAIL-CLOSED');

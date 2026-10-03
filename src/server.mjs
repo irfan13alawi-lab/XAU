@@ -724,7 +724,11 @@ function aggregateStats(db, now) {
   });
   const pendingExpiredCount = db.prepare("SELECT COUNT(*) AS n FROM orders WHERE status = 'EXPIRED'").get().n;
   const result = aggregateTradeStatistics(rows, { now, pendingExpiredCount });
-  const closedBrokerPaperTrades = rows.filter((row) => row.broker === 'BROKER'
+  // The production XAU feed is a read-only VPS proxy and is persisted as
+  // MARKET_DATA. Keep BROKER for compatibility with broker-adapter fixtures,
+  // but count both accepted provider sources toward the operational paper
+  // history milestone.
+  const closedBrokerPaperTrades = rows.filter((row) => ['BROKER', 'MARKET_DATA'].includes(row.broker)
     && row.pnlR !== null && row.pnlR !== undefined && Number.isFinite(Number(row.pnlR))
     && Boolean(row.currency)
     && row.setupQuality.some((tag) => /^MTF_[0-4]_OF_4$/.test(tag))).length;
@@ -1283,7 +1287,7 @@ export async function handleTelegramCommand({ command, updateId, db, operatorTok
       'Closed trades: ' + stats.sampleCount + ' · today: ' + today.sampleCount,
       'Today realized net PnL: ' + pnl,
       evidence,
-      'Broker-fed forward milestone: ' + stats.forwardEvidence.closedBrokerPaperTrades + ' / ' + stats.forwardEvidence.required,
+      'Provider-fed forward milestone: ' + stats.forwardEvidence.closedBrokerPaperTrades + ' / ' + stats.forwardEvidence.required,
     ].join('\n');
   }
   if (name === 'lastscan') {

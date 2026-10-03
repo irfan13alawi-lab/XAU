@@ -19,7 +19,7 @@ const costs = {
   accountCurrency: 'USD',
 };
 
-function fixtureDatabase() {
+function fixtureDatabase(marketSource = 'BROKER') {
   const migrations = fileURLToPath(new URL('../src/migrations/', import.meta.url));
   const db = openDatabase(':memory:', migrations);
   const now = new Date('2026-09-21T12:00:00.000Z');
@@ -50,12 +50,17 @@ function fixtureDatabase() {
     paperCosts: null,
     plan: { entry: 2001, stop: 1998, takeProfit1: 2005, takeProfit2: 2008, riskReward: 2 },
     market: {
-      source: 'BROKER',
+      source: marketSource,
       quote: { bid: 2000, ask: 2000.2 },
       session: { active: ['LONDON'], marketScheduleStatus: 'SCHEDULED_OPEN · HOLIDAYS UNKNOWN' },
     },
     snapshots: {
       config: { minSignalScore: 70, minConfluencePct: 60, minRiskReward: 2 },
+      market: {
+        source: marketSource,
+        quote: { bid: 2000, ask: 2000.2 },
+        session: { active: ['LONDON'], marketScheduleStatus: 'SCHEDULED_OPEN · HOLIDAYS UNKNOWN' },
+      },
       news: { allowed: true, status: 'HEALTHY' },
       decision: {
         alignedTimeframes: 3,
@@ -150,6 +155,24 @@ test('paper lifecycle persists fill, TP1 partial, break-even, TP2 trade, ledger,
     const replay = reconcilePaperExecution(db, { quote: brokerQuote(t2, 2008.2, 2008.3), costs, now: t2 });
     assert.equal(replay.closed, 0);
     assert.equal(db.prepare('SELECT COUNT(*) AS n FROM trades').get().n, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test('market-data provider paper closes count toward the forward-history milestone', () => {
+  const db = fixtureDatabase('MARKET_DATA');
+  const t0 = new Date('2026-09-21T12:00:00.000Z');
+  try {
+    const fillAt = new Date(t0.getTime() + 1000);
+    assert.equal(reconcilePaperExecution(db, { quote: brokerQuote(fillAt, 2000.8, 2000.9), costs, now: fillAt }).filled, 1);
+    const tp1At = new Date(fillAt.getTime() + 60_000);
+    assert.equal(reconcilePaperExecution(db, { quote: brokerQuote(tp1At, 2005.2, 2005.3), costs, now: tp1At }).monitored, 1);
+    const closeAt = new Date(tp1At.getTime() + 60_000);
+    assert.equal(reconcilePaperExecution(db, { quote: brokerQuote(closeAt, 2008.2, 2008.3), costs, now: closeAt }).closed, 1);
+    const dashboard = dashboardSnapshot(db, closeAt);
+    assert.equal(dashboard.statistics.forwardEvidence.closedBrokerPaperTrades, 1);
+    assert.equal(dashboard.counts.forwardPaperTrades, 1);
   } finally {
     db.close();
   }
