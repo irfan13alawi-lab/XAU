@@ -179,6 +179,17 @@ jobs:
             exit 1
           fi
 
+          # A weekend market close is an expected fail-closed operating state,
+          # not a deployment failure. Do not force resume or wait for a ready
+          # gate while the market is closed; normal readiness gates still apply
+          # when the market is open.
+          HEALTH_JSON="$(curl -fsS --max-time 3 http://127.0.0.1:18087/healthz)"
+          if printf '%s' "$HEALTH_JSON" | grep -q '"readiness":"not_ready"' \
+            && printf '%s' "$HEALTH_JSON" | grep -q '"readinessReasons":\["MARKET_CLOSED"\]'; then
+            echo "NEXORA_MARKET_CLOSED_SAFE_STATE commit=$DEPLOY_SHA"
+            exit 0
+          fi
+
           for attempt in $(seq 1 60); do
             if curl -fsS --max-time 3 http://127.0.0.1:18087/healthz | grep -q '"readiness":"ready"'; then
               if curl -fsS --max-time 5 -X POST http://127.0.0.1:18087/api/actions/resume \
