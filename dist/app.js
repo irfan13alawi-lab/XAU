@@ -500,6 +500,52 @@
     }
   }
 
+  function renderScanDiagnostics(diagnostics) {
+    const summary = diagnostics && typeof diagnostics === 'object' ? diagnostics : {};
+    const reasons = $('#scanDiagnosticReasons');
+    const nearMisses = $('#scanDiagnosticNearMisses');
+    const sampleCount = Number(summary.sampleCount ?? 0);
+    const rejectedCount = Number(summary.rejectedCount ?? 0);
+    const stagedCount = Number(summary.stagedCount ?? 0);
+    setText('#scanDiagnosticScans', Number.isFinite(sampleCount) ? sampleCount : '—');
+    setText('#scanDiagnosticRejected', Number.isFinite(rejectedCount) ? rejectedCount : '—');
+    setText('#scanDiagnosticStaged', Number.isFinite(stagedCount) ? stagedCount : '—');
+    setText('#scanDiagnosticStatus', sampleCount ? `${rejectedCount} rejected · ${sampleCount} scans` : 'NO SCANS');
+    if (reasons) {
+      reasons.replaceChildren();
+      const items = Array.isArray(summary.reasonCounts) ? summary.reasonCounts : [];
+      if (!items.length) reasons.append(makeElement('div', 'empty-state', 'No rejection reasons recorded in this window.'));
+      for (const item of items) {
+        const row = makeElement('div', 'diagnostic-row');
+        row.append(makeElement('span', '', String(item.reason ?? 'UNKNOWN').replaceAll('_', ' ')));
+        row.append(makeElement('strong', '', `${Number(item.count ?? 0)}×`));
+        reasons.append(row);
+      }
+    }
+    if (nearMisses) {
+      nearMisses.replaceChildren();
+      const items = Array.isArray(summary.nearMisses) ? summary.nearMisses : [];
+      if (!items.length) nearMisses.append(makeElement('div', 'empty-state', 'No rejected setups with comparable gate values yet.'));
+      for (const item of items) {
+        const row = makeElement('div', 'diagnostic-row diagnostic-near-miss');
+        const title = makeElement('strong', '', `${item.symbol ?? '—'} · ${item.direction ?? 'NO BIAS'}`);
+        const values = [
+          Number.isFinite(Number(item.score)) ? `score ${Number(item.score).toFixed(0)}` : 'score —',
+          Number.isFinite(Number(item.confluencePct)) ? `confluence ${Number(item.confluencePct).toFixed(0)}%` : 'confluence —',
+          Number.isFinite(Number(item.alignedTimeframes)) ? `${Number(item.alignedTimeframes).toFixed(0)}/4 aligned` : 'alignment —',
+        ];
+        const details = makeElement('small', '', `${values.join(' · ')} · ${timeOf(item.completedAt)}`);
+        const causes = makeElement('span', '', (item.reasons ?? []).slice(0, 3).map((reason) => String(reason).replaceAll('_', ' ')).join(' · ') || 'No reason recorded');
+        row.append(title, details, causes);
+        nearMisses.append(row);
+      }
+    }
+    const thresholds = summary.thresholds ?? {};
+    setText('#scanDiagnosticFoot', sampleCount
+      ? `Source: persisted paper scans · ${summary.window ?? '24h'} · thresholds ${thresholds.minSignalScore ?? '—'} score / ${thresholds.minConfluencePct ?? '—'}% confluence / ${thresholds.minimumAlignedTimeframes ?? '—'}/4 aligned · informational only.`
+      : 'Source: persisted paper scans · no completed scans in this window.');
+  }
+
   function renderJournal(stats, closedCount) {
     const grid = $('#journalMetrics');
     const slices = $('#journalSlices');
@@ -774,6 +820,7 @@
     renderMarket(data.market);
     renderWatchlist(data.markets);
     renderMtf(mtf, data);
+    renderScanDiagnostics(data.scanDiagnostics);
     renderPositions(data.positions, data.orders, Boolean(data.control?.operatorAuthenticated), data.market?.dataFreshness === 'FRESH');
     renderAudit(audit);
     renderJournal(data.statistics, counts.closedTrades ?? 0);

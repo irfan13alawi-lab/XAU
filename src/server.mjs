@@ -64,6 +64,7 @@ const OBSERVED_ROUTES = new Map([
   ['/api/telemetry/worker', 'telemetry.worker'],
   ['/api/scan/latest', 'scan.latest'],
   ['/api/lastscan', 'scan.latest'],
+  ['/api/scan/diagnostics', 'scan.diagnostics'],
   ['/api/actions/pause', 'action.pause'],
   ['/api/actions/resume', 'action.resume'],
   ['/api/actions/scan', 'action.scan'],
@@ -347,6 +348,110 @@ function latestMtfSnapshot(db) {
       configVersion: riskRow.config_version,
       createdAt: riskRow.created_at,
     } : null,
+  };
+}
+
+const SCAN_DIAGNOSTIC_WINDOW_MS = 24 * 60 * 60_000;
+const MAX_SCAN_DIAGNOSTIC_ROWS = 500;
+
+function scanDiagnosticGate(snapshot) {
+  const root = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot) ? snapshot : {};
+  return root.snapshots?.decision?.gate
+    ?? root.decision?.gate
+    ?? root.gate
+    ?? {};
+}
+
+export function scanDiagnosticsSnapshot(db, now = new Date(), window = '24h') {
+  const windowMs = window === '7d' ? 7 * SCAN_DIAGNOSTIC_WINDOW_MS : SCAN_DIAGNOSTIC_WINDOW_MS;
+  const from = new Date(now.getTime() - windowMs).toISOString();
+  const until = now.toISOString();
+  const rows = db.prepare(`
+    SELECT id, symbol, started_at, completed_at, status, direction, score, confluence_pct,
+      reason_json, decision_snapshot_json
+    FROM scan_runs
+    WHERE COALESCE(completed_at, started_at) >= ? AND COALESCE(completed_at, started_at) <= ?
+    ORDER BY COALESCE(completed_at, started_at) DESC, rowid DESC LIMIT ?
+  `).all(from, until, MAX_SCAN_DIAGNOSTIC_ROWS);
+  const statusCounts = {};
+  const reasonCounts = {};
+  const nearMisses = [];
+  const scoreThreshold = Number(config.risk.minSignalScore);
+  const confluenceThreshold = Number(config.risk.minConfluencePct);
+  const alignedThreshold = Number(config.strategyParameters?.minimumAlignedTimeframes ?? 3);
+
+  for (const row of rows) {
+    const status = typeof row.status === 'string' && row.status ? row.status : 'UNKNOWN';
+    statusCounts[status] = (statusCounts[status] ?? 0) + 1;
+    const reasons = parseJson(row.reason_json, []);
+    const safeReasons = Array.isArray(reasons)
+      ? reasons.filter((reason) => typeof reason === 'string' && /^[A-Z0-9_]{2,80}$/.test(reason)).slice(0, 20)
+      : [];
+    for (const reason of safeReasons) reasonCounts[reason] = (reasonCounts[reason] ?? 0) + 1;
+    if (status !== 'REJECTED') continue;
+
+    const decisionSnapshot = parseJson(row.decision_snapshot_json, {});
+    const gate = scanDiagnosticGate(decisionSnapshot);
+    const score = Number.isFinite(Number(row.score)) ? Number(row.score)
+      : Number.isFinite(Number(gate.score)) ? Number(gate.score) : null;
+    const confluencePct = Number.isFinite(Number(row.confluence_pct)) ? Number(row.confluence_pct)
+      : Number.isFinite(Number(gate.confluencePct)) ? Number(gate.confluencePct) : null;
+    const alignedTimeframes = Number.isFinite(Number(gate.alignedTimeframes))
+      ? Number(gate.alignedTimeframes)
+      : Number.isFinite(Number(decisionSnapshot.snapshots?.decision?.alignedTimeframes))
+        ? Number(decisionSnapshot.snapshots.decision.alignedTimeframes) : null;
+    const deficits = {
+      score: Number.isFinite(score) ? Math.max(0, scoreThreshold - score) : null,
+      confluencePct: Number.isFinite(confluencePct) ? Math.max(0, confluenceThreshold - confluencePct) : null,
+      alignedTimeframes: Number.isFinite(alignedTimeframes) ? Math.max(0, alignedThreshold - alignedTimeframes) : null,
+    };
+    const normalizedDeficits = [
+      deficits.score == null ? null : deficits.score / Math.max(1, scoreThreshold),
+      deficits.confluencePct == null ? null : deficits.confluencePct / Math.max(1, confluenceThreshold),
+      deficits.alignedTimeframes == null ? null : deficits.alignedTimeframes / Math.max(1, alignedThreshold),
+    ].filter((value) => value != null);
+    nearMisses.push({
+      id: row.id,
+      symbol: row.symbol,
+      completedAt: row.completed_at ?? row.started_at,
+      status,
+      direction: row.direction ?? gate.direction ?? null,
+      score,
+      confluencePct,
+      alignedTimeframes,
+      reasons: safeReasons.slice(0, 5),
+      deficits,
+      distance: normalizedDeficits.length
+        ? Number((normalizedDeficits.reduce((sum, value) => sum + value, 0) / normalizedDeficits.length).toFixed(3))
+        : null,
+    });
+  }
+
+  const sortedReasonCounts = Object.entries(reasonCounts)
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, 12)
+    .map(([reason, count]) => ({ reason, count }));
+  nearMisses.sort((left, right) => {
+    const leftDistance = left.distance ?? Number.POSITIVE_INFINITY;
+    const rightDistance = right.distance ?? Number.POSITIVE_INFINITY;
+    return leftDistance - rightDistance || String(right.completedAt).localeCompare(String(left.completedAt));
+  });
+
+  return {
+    window,
+    from,
+    until,
+    sampleCount: rows.length,
+    rejectedCount: statusCounts.REJECTED ?? 0,
+    stagedCount: statusCounts.ORDER_STAGED ?? 0,
+    statusCounts,
+    reasonCounts: sortedReasonCounts,
+    nearMisses: nearMisses.slice(0, 5),
+    thresholds: {
+      minSignalScore: scoreThreshold,
+      minConfluencePct: confluenceThreshold,
+      minimumAlignedTimeframes: alignedThreshold,
+    },
   };
 }
 
@@ -663,6 +768,7 @@ export function dashboardSnapshot(db, now = new Date()) {
         isCurrent: Number.isFinite(ageMs) && ageMs <= 20 * 60_000 && !blockedByTransientData,
       };
     })() : null,
+    scanDiagnostics: scanDiagnosticsSnapshot(db, now),
     statistics,
   };
 }
@@ -1003,6 +1109,11 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
       }
       if (method === 'GET' && ['/api/scan/latest', '/api/lastscan'].includes(url.pathname)) {
         return jsonResponse(res, 200, dashboardSnapshot(db, now).lastScan);
+      }
+      if (method === 'GET' && url.pathname === '/api/scan/diagnostics') {
+        const window = url.searchParams.get('window') ?? '24h';
+        if (!['24h', '7d'].includes(window)) return jsonResponse(res, 400, { error: 'SCAN_DIAGNOSTIC_WINDOW_INVALID' });
+        return jsonResponse(res, 200, scanDiagnosticsSnapshot(db, now, window));
       }
       if (method === 'GET' && url.pathname.startsWith('/api/')) {
         return jsonResponse(res, 404, { error: 'API route not found.' });

@@ -6,7 +6,7 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { appendAudit, openDatabase, readState, writeState } from '../src/database.mjs';
-import { initializeDatabase, createNexoraServer, validLocalHost, handleTelegramCommand, dashboardSnapshot } from '../src/server.mjs';
+import { initializeDatabase, createNexoraServer, validLocalHost, handleTelegramCommand, dashboardSnapshot, scanDiagnosticsSnapshot } from '../src/server.mjs';
 import { PaperWorker } from '../src/worker.mjs';
 import { activeSessions } from '../src/domain/market-sessions.mjs';
 import { config, fingerprintConfiguration } from '../src/config.mjs';
@@ -77,6 +77,43 @@ test('dashboard enables paper entries only when every readiness gate and worker 
     ]);
   } finally {
     telemetryDb.close();
+  }
+});
+
+test('scan diagnostics summarize persisted gate failures without exposing decision snapshots', () => {
+  const now = new Date('2026-09-21T00:00:00.000Z');
+  const diagnosticDb = openDatabase(':memory:', fileURLToPath(new URL('../src/migrations/', import.meta.url)));
+  initializeDatabase(diagnosticDb, now);
+  try {
+    diagnosticDb.prepare(`
+      INSERT INTO scan_runs (id, idempotency_key, symbol, started_at, completed_at, status, direction, score, confluence_pct, reason_json, config_version, correlation_id, decision_snapshot_json)
+      VALUES (?, ?, 'XAUUSD', ?, ?, 'REJECTED', 'SHORT', 62, 50, ?, ?, ?, ?)
+    `).run(
+      'diagnostic-rejected', 'diagnostic-rejected-key',
+      new Date(now.getTime() - 5 * 60_000).toISOString(), now.toISOString(),
+      JSON.stringify(['SCORE_BELOW_MINIMUM', 'HIGHER_TIMEFRAME_CONFLICT']),
+      config.strategyVersion, 'diagnostic-correlation', JSON.stringify({ gate: { alignedTimeframes: 2 } }),
+    );
+    diagnosticDb.prepare(`
+      INSERT INTO scan_runs (id, idempotency_key, symbol, started_at, completed_at, status, direction, score, confluence_pct, reason_json, config_version, correlation_id, decision_snapshot_json)
+      VALUES (?, ?, 'XAUUSD', ?, ?, 'ORDER_STAGED', 'LONG', 82, 75, '[]', ?, ?, '{}')
+    `).run(
+      'diagnostic-staged', 'diagnostic-staged-key',
+      new Date(now.getTime() - 10 * 60_000).toISOString(), new Date(now.getTime() - 10 * 60_000).toISOString(),
+      config.strategyVersion, 'diagnostic-correlation-staged',
+    );
+
+    const diagnostics = scanDiagnosticsSnapshot(diagnosticDb, now);
+    assert.equal(diagnostics.sampleCount, 2);
+    assert.equal(diagnostics.rejectedCount, 1);
+    assert.equal(diagnostics.stagedCount, 1);
+    assert.equal(diagnostics.reasonCounts[0].reason, 'HIGHER_TIMEFRAME_CONFLICT');
+    assert.equal(diagnostics.nearMisses.length, 1);
+    assert.equal(diagnostics.nearMisses[0].alignedTimeframes, 2);
+    assert.equal(diagnostics.nearMisses[0].deficits.score, 8);
+    assert.equal(Object.hasOwn(diagnostics.nearMisses[0], 'decision_snapshot_json'), false);
+  } finally {
+    diagnosticDb.close();
   }
 });
 

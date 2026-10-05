@@ -169,6 +169,20 @@
             </article>
           </section>
 
+          <section class="panel scan-diagnostics-panel" data-section-panel="overview">
+            <div class="panel-header"><div><p class="eyebrow">SCAN DIAGNOSTICS · 24H</p><h2>Why entries are held</h2></div><span class="status-pill gray-pill" id="scanDiagnosticStatus">NO SCANS</span></div>
+            <div class="diagnostic-stat-grid">
+              <div><span>Scans reviewed</span><strong id="scanDiagnosticScans">—</strong></div>
+              <div><span>Rejected</span><strong id="scanDiagnosticRejected">—</strong></div>
+              <div><span>Orders staged</span><strong id="scanDiagnosticStaged">—</strong></div>
+            </div>
+            <div class="diagnostic-body">
+              <div><p class="eyebrow">TOP GATES</p><div id="scanDiagnosticReasons" class="diagnostic-list"><div class="empty-state">No scan diagnostics yet.</div></div></div>
+              <div><p class="eyebrow">CLOSEST SETUPS</p><div id="scanDiagnosticNearMisses" class="diagnostic-list"><div class="empty-state">No rejected setups yet.</div></div></div>
+            </div>
+            <div class="panel-foot" id="scanDiagnosticFoot">Source: persisted paper scans · informational only · thresholds unchanged.</div>
+          </section>
+
           <section class="lower-grid" data-section-panel="overview">
             <article class="panel positions-panel">
               <div class="panel-header"><div><p class="eyebrow">EXECUTION MONITOR</p><h2>Paper positions &amp; orders</h2></div><button class="ghost-button" id="refreshButton">Refresh <span aria-hidden="true">↻</span></button></div>
