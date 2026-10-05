@@ -75,6 +75,13 @@ jobs:
           case "$DEPLOY_SHA" in
             (*[!0-9a-f]*) echo "Invalid commit SHA"; exit 1 ;;
           esac
+          # Diagnose capacity before any deployment write. This reports only
+          # aggregate sizes; it never prints environment files or secrets.
+          ssh -i "$HOME/.ssh/nexora_deploy" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            "$VPS_USER@$VPS_HOST" \
+            'echo "=== VPS CAPACITY ==="; df -h / /opt 2>/dev/null || true; df -i / /opt 2>/dev/null || true; echo "=== TOP DIRECTORIES ==="; du -xhd1 /opt/nexora-xau /var/lib/docker /var/log /tmp 2>/dev/null | sort -h | tail -n 30 || true; echo "=== DOCKER DISK ==="; docker system df 2>/dev/null || true'
           # The VPS hosts several paper dashboards. Reclaim only unused Docker
           # image layers before writing deployment secrets; active containers,
           # named volumes, source files, and the SQLite database are untouched.
@@ -83,12 +90,23 @@ jobs:
             -o BatchMode=yes \
             "$VPS_USER@$VPS_HOST" \
             'docker image prune -af --filter until=168h'
+          # Builder cache and old journal entries are disposable operational
+          # artifacts. Never prune volumes or remove application/database files.
+          ssh -i "$HOME/.ssh/nexora_deploy" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            "$VPS_USER@$VPS_HOST" \
+            'docker builder prune -af 2>/dev/null || true; sudo -n journalctl --vacuum-time=7d 2>/dev/null || true'
           if [ -n "${NEXORA_TWELVEDATA_API_KEY:-}" ]; then
-            printf '%s' "$NEXORA_TWELVEDATA_API_KEY" | ssh -i "$HOME/.ssh/nexora_deploy" \
-              -o IdentitiesOnly=yes \
-              -o BatchMode=yes \
-              "$VPS_USER@$VPS_HOST" \
-              'umask 077; install -d -m 700 /opt/nexora-xau; cat > /opt/nexora-xau/.nexora_twelvedata_api_key'
+            # TwelveData is optional because the VPS proxy has a working
+            # Biquote fallback. A full disk must not abort a safe paper deploy.
+            if ! printf '%s' "$NEXORA_TWELVEDATA_API_KEY" | ssh -i "$HOME/.ssh/nexora_deploy" \
+                -o IdentitiesOnly=yes \
+                -o BatchMode=yes \
+                "$VPS_USER@$VPS_HOST" \
+                'umask 077; install -d -m 700 /opt/nexora-xau; cat > /opt/nexora-xau/.nexora_twelvedata_api_key'; then
+              echo "WARN: optional TwelveData key could not be transferred; continuing with VPS fallback provider"
+            fi
           fi
           ssh -i "$HOME/.ssh/nexora_deploy" \
             -o IdentitiesOnly=yes \
