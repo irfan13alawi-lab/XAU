@@ -75,6 +75,14 @@ jobs:
           case "$DEPLOY_SHA" in
             (*[!0-9a-f]*) echo "Invalid commit SHA"; exit 1 ;;
           esac
+          # The VPS hosts several paper dashboards. Reclaim only unused Docker
+          # image layers before writing deployment secrets; active containers,
+          # named volumes, source files, and the SQLite database are untouched.
+          ssh -i "$HOME/.ssh/nexora_deploy" \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            "$VPS_USER@$VPS_HOST" \
+            'docker image prune -af --filter until=168h'
           if [ -n "${NEXORA_TWELVEDATA_API_KEY:-}" ]; then
             printf '%s' "$NEXORA_TWELVEDATA_API_KEY" | ssh -i "$HOME/.ssh/nexora_deploy" \
               -o IdentitiesOnly=yes \
