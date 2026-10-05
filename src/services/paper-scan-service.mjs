@@ -5,7 +5,7 @@ import { evaluateNewsBlackout } from '../domain/news.mjs';
 import { evaluatePaperScan } from '../domain/paper-engine.mjs';
 import { activeSessions } from '../domain/market-sessions.mjs';
 import { loadFreshRiskMetrics } from './risk-state-service.mjs';
-import { isFreshMarketSnapshot } from '../market-source.mjs';
+import { isFreshMarketSnapshot, MARKET_QUOTE_MAX_AGE_MS } from '../market-source.mjs';
 
 function httpRequestAuditMetadata(httpRequestId) {
   return typeof httpRequestId === 'string'
@@ -28,8 +28,12 @@ function loadScanContext(db, now = new Date(), symbol = 'XAUUSD') {
   const observedAt = latest?.observed_at ? Date.parse(latest.observed_at) : NaN;
   const receivedAgeMs = Number.isFinite(receivedAt) ? now.getTime() - receivedAt : Number.POSITIVE_INFINITY;
   const observedAgeMs = Number.isFinite(observedAt) ? now.getTime() - observedAt : Number.POSITIVE_INFINITY;
+  // Keep scan freshness aligned with the worker/readiness contract. Using a
+  // shorter private window here caused a valid provider quote to be shown as
+  // FRESH by the dashboard while the next M15 scan was rejected as stale.
   const marketFresh = isFreshMarketSnapshot(latest)
-    && receivedAgeMs >= 0 && receivedAgeMs <= 30_000 && observedAgeMs >= 0 && observedAgeMs <= 30_000;
+    && receivedAgeMs >= 0 && receivedAgeMs <= MARKET_QUOTE_MAX_AGE_MS
+    && observedAgeMs >= 0 && observedAgeMs <= MARKET_QUOTE_MAX_AGE_MS;
   const market = {
     source: latest?.source ?? 'none',
     dataFreshness: marketFresh ? 'FRESH' : latest ? 'STALE' : 'UNAVAILABLE',

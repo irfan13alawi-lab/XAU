@@ -214,6 +214,26 @@ test('worker ingests normalized data, applies news blackout, and scans a new clo
   }
 });
 
+test('scan freshness uses the same five-minute quote contract as worker readiness', async () => {
+  const now = new Date('2026-09-21T12:00:00.000Z');
+  const db = dbFixture(now);
+  try {
+    const fakeProviders = providers(now);
+    const originalReadMarketData = fakeProviders.provider.readMarketData;
+    fakeProviders.provider.readMarketData = async () => {
+      const payload = await originalReadMarketData();
+      payload.quote.observedAt = new Date(now.getTime() - 45_000).toISOString();
+      return payload;
+    };
+    const result = await new PaperWorker({ db, ...fakeProviders, clock: () => now }).tick();
+    assert.ok(result.scan);
+    assert.equal(result.scan.reasons.includes('MARKET_DATA_STALE'), false);
+    assert.ok(result.scan.reasons.includes('NEWS_BLACKOUT'));
+  } finally {
+    db.close();
+  }
+});
+
 test('worker ingests the full watchlist but scans only configured paper-trading symbols', async () => {
   const now = new Date('2026-09-21T12:00:00.000Z');
   const db = dbFixture(now);
