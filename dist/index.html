@@ -183,6 +183,16 @@
             <div class="panel-foot" id="scanDiagnosticFoot">Source: persisted paper scans · informational only · thresholds unchanged.</div>
           </section>
 
+          <section class="panel integrity-panel" data-section-panel="overview">
+            <div class="panel-header"><div><p class="eyebrow">DATA INTEGRITY WATCH</p><h2>Evidence quality</h2></div><span class="status-pill gray-pill" id="integrityStatus">CHECKING</span></div>
+            <div class="diagnostic-stat-grid">
+              <div><span>Quarantined trades</span><strong id="quarantinedTrades">—</strong></div>
+              <div><span>Quarantined snapshots</span><strong id="quarantinedSnapshots">—</strong></div>
+              <div><span>Unresolved candle conflicts</span><strong id="candleConflicts">—</strong></div>
+            </div>
+            <div class="integrity-meta" id="integrityMeta">Integrity evidence is loading.</div>
+          </section>
+
           <section class="lower-grid" data-section-panel="overview">
             <article class="panel positions-panel">
               <div class="panel-header"><div><p class="eyebrow">EXECUTION MONITOR</p><h2>Paper positions &amp; orders</h2></div><button class="ghost-button" id="refreshButton">Refresh <span aria-hidden="true">↻</span></button></div>

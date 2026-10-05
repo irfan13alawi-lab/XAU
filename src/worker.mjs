@@ -69,13 +69,20 @@ function persistWorkerCycleTelemetry(db, telemetry, now, pruneHistory, workerSta
         observed_at, duration_ms, error_class,
         broker_health_attempted, broker_health_duration_ms, broker_health_status,
         market_data_attempted, market_data_duration_ms, market_data_status,
-        news_calendar_attempted, news_calendar_duration_ms, news_calendar_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        news_calendar_attempted, news_calendar_duration_ms, news_calendar_status,
+        health_ms, market_data_ms, news_ms, scan_ms, execution_ms, accounting_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       observedAt, telemetryDuration(telemetry.durationMs), errorClass,
       Number(broker.attempted), broker.durationMs, broker.status,
       Number(market.attempted), market.durationMs, market.status,
       Number(news.attempted), news.durationMs, news.status,
+      telemetryDuration(telemetry.stages?.healthMs),
+      telemetryDuration(telemetry.stages?.marketDataMs),
+      telemetryDuration(telemetry.stages?.newsMs),
+      telemetryDuration(telemetry.stages?.scanMs),
+      telemetryDuration(telemetry.stages?.executionMs),
+      telemetryDuration(telemetry.stages?.accountingMs),
     );
     if (workerState) writeState(db, 'worker', workerState, observedAt);
     if (pruneHistory) pruneWorkerCycleTelemetry(db, now);
@@ -121,7 +128,7 @@ function round(value, places = 8) {
   return Number(Number(value).toFixed(places));
 }
 
-function persistPaperRiskState(db, now = new Date(), snapshotOverride = undefined) {
+function persistPaperRiskState(db, now = new Date(), snapshotOverride = undefined, { cachedDailyLossR = null } = {}) {
   if (config.paperStartingEquity == null) return null;
   const snapshot = snapshotOverride === undefined ? latestPaperEquitySnapshot(db) : snapshotOverride;
   if (!snapshot || !positive(snapshot.equity) || !/^[A-Z]{3,8}$/.test(String(snapshot.currency ?? ''))) {
@@ -138,22 +145,25 @@ function persistPaperRiskState(db, now = new Date(), snapshotOverride = undefine
   }
 
   const dayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
-  const realizedToday = Number(db.prepare(`
+  const cachedLoss = Number(cachedDailyLossR);
+  const realizedToday = Number.isFinite(cachedLoss) && cachedLoss >= 0 ? null : Number(db.prepare(`
     SELECT COALESCE(SUM(CAST(net_pnl AS REAL)), 0) AS total
     FROM trades WHERE accounting_status = 'VALID' AND closed_at >= ? AND closed_at <= ?
   `).get(dayStart, now.toISOString())?.total ?? 0);
   const riskUnit = Number(snapshot.equity) * Number(config.risk.riskPerTradePct) / 100;
-  const dailyLossR = Number.isFinite(realizedToday) && riskUnit > 0
+  const dailyLossR = Number.isFinite(cachedLoss) && cachedLoss >= 0 ? cachedLoss
+    : Number.isFinite(realizedToday) && riskUnit > 0
     ? Math.max(0, round(-realizedToday / riskUnit, 6)) : 0;
-  writeState(db, 'riskMetrics', {
+  const value = {
     equity: Number(snapshot.equity),
     currency: String(snapshot.currency).trim().toUpperCase(),
     dailyLossR,
     drawdownPct: nonNegative(snapshot.drawdownPct) ? Number(snapshot.drawdownPct) : 0,
     maxSpreadPrice: config.risk.maxSpreadPrice,
     source: 'PAPER_SIMULATION',
-  }, now.toISOString());
-  return readState(db, 'riskMetrics', null);
+  };
+  writeState(db, 'riskMetrics', value, now.toISOString());
+  return value;
 }
 
 function candleValid(candle) {
@@ -521,6 +531,9 @@ export class PaperWorker {
   #marketDataStateCache = new Map();
   #marketSnapshotCache = new Map();
   #lastScanProbeAt = null;
+  #paperEquitySnapshot = null;
+  #paperRiskState = null;
+  #paperRiskDayStart = null;
 
   constructor({
     db,
@@ -716,8 +729,19 @@ export class PaperWorker {
       }
       stages.executionMs = elapsedMilliseconds(executionStartedAt, performance.now());
       const accountingStartedAt = performance.now();
-      const paperEquitySnapshot = capturePaperEquitySnapshot(this.db, now);
-      if (readState(this.db, 'paperMode', config.paperMode) === true) persistPaperRiskState(this.db, now, paperEquitySnapshot);
+      const forceEquitySnapshot = execution.filled > 0 || execution.closed > 0;
+      const paperEquitySnapshot = capturePaperEquitySnapshot(this.db, now, {
+        force: forceEquitySnapshot,
+        cachedSnapshot: this.#paperEquitySnapshot,
+      });
+      this.#paperEquitySnapshot = paperEquitySnapshot;
+      if (readState(this.db, 'paperMode', config.paperMode) === true) {
+        const currentDayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
+        const cachedDailyLossR = !forceEquitySnapshot && this.#paperRiskDayStart === currentDayStart
+          ? this.#paperRiskState?.dailyLossR : null;
+        this.#paperRiskState = persistPaperRiskState(this.db, now, paperEquitySnapshot, { cachedDailyLossR });
+        this.#paperRiskDayStart = currentDayStart;
+      }
       stages.accountingMs = elapsedMilliseconds(accountingStartedAt, performance.now());
       const telemetry = {
         durationMs: elapsedMilliseconds(tickStartedAt, this.monotonicNow()),

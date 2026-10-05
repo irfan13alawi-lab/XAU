@@ -546,6 +546,26 @@
       : 'Source: persisted paper scans · no completed scans in this window.');
   }
 
+  function renderIntegrity(integrity) {
+    const snapshot = integrity && typeof integrity === 'object' ? integrity : {};
+    const quarantine = snapshot.quarantine ?? {};
+    const candles = snapshot.candles ?? {};
+    const tradeCount = Number(quarantine.trades ?? 0);
+    const snapshotCount = Number(quarantine.equitySnapshots ?? 0);
+    const conflictCount = Number(candles.unresolvedConflicts ?? 0);
+    setText('#integrityStatus', snapshot.status ?? 'UNAVAILABLE');
+    setText('#quarantinedTrades', Number.isFinite(tradeCount) ? tradeCount : '—');
+    setText('#quarantinedSnapshots', Number.isFinite(snapshotCount) ? snapshotCount : '—');
+    setText('#candleConflicts', Number.isFinite(conflictCount) ? conflictCount : '—');
+    const conflictGroups = (candles.conflicts ?? []).slice(0, 3).map((item) => `${item.symbol} ${item.timeframe} (${item.count})`);
+    const repaired = Number(candles.repairedLast24h ?? 0);
+    setText('#integrityMeta', tradeCount || snapshotCount
+      ? `Quarantine requires reconciliation before performance evidence is interpreted · ${conflictGroups.join(' · ') || 'no unresolved candle conflicts'}${repaired ? ` · repaired ${repaired} candle(s) in 24h` : ''}`
+      : conflictCount
+        ? `Unresolved candle conflicts remain fail-closed · ${conflictGroups.join(' · ') || 'review candle quality'}${repaired ? ` · repaired ${repaired} candle(s) in 24h` : ''}`
+        : 'No quarantined accounting evidence or unresolved candle conflicts reported.');
+  }
+
   function renderJournal(stats, closedCount) {
     const grid = $('#journalMetrics');
     const slices = $('#journalSlices');
@@ -726,7 +746,9 @@
       setText('#workerTrend', 'No cycles recorded in the last hour');
     } else {
       const p95 = Number.isFinite(workerTrend.durationMs?.p95) ? `${workerTrend.durationMs.p95.toFixed(1)} ms` : '—';
-      setText('#workerTrend', `n=${workerTrend.sampleCount} · p95 ${p95} · errors ${workerTrend.failedCycles ?? 0}`);
+      const accountingP95 = Number.isFinite(workerTrend.stages?.accountingMs?.p95) ? ` · acct ${workerTrend.stages.accountingMs.p95.toFixed(1)} ms` : '';
+      const scanP95 = Number.isFinite(workerTrend.stages?.scanMs?.p95) ? ` · scan ${workerTrend.stages.scanMs.p95.toFixed(1)} ms` : '';
+      setText('#workerTrend', `n=${workerTrend.sampleCount} · p95 ${p95}${accountingP95}${scanP95} · errors ${workerTrend.failedCycles ?? 0}`);
       if ($('#workerTrend')) $('#workerTrend').title = workerTrend.truncated
         ? 'Local SQLite worker-cycle history; this window is capped at the most recent 6,000 samples.'
         : 'Local SQLite worker-cycle history for the last hour; diagnostic latency, not broker execution evidence.';
@@ -821,6 +843,7 @@
     renderWatchlist(data.markets);
     renderMtf(mtf, data);
     renderScanDiagnostics(data.scanDiagnostics);
+    renderIntegrity(data.integrity);
     renderPositions(data.positions, data.orders, Boolean(data.control?.operatorAuthenticated), data.market?.dataFreshness === 'FRESH');
     renderAudit(audit);
     renderJournal(data.statistics, counts.closedTrades ?? 0);

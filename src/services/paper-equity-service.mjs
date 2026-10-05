@@ -17,11 +17,7 @@ function latestPeak(db, equity) {
   return Math.max(numeric(row?.peak), numeric(equity));
 }
 
-export function latestPaperEquitySnapshot(db) {
-  const row = db.prepare(`
-    SELECT id, source, currency, balance, equity, realized_pnl, unrealized_pnl, drawdown_pct, observed_at, details_json
-    FROM equity_snapshots WHERE accounting_status = 'VALID' ORDER BY observed_at DESC LIMIT 1
-  `).get();
+function snapshotFromRow(row) {
   if (!row) return null;
   return {
     id: row.id,
@@ -37,8 +33,19 @@ export function latestPaperEquitySnapshot(db) {
   };
 }
 
-export function capturePaperEquitySnapshot(db, now = new Date(), { force = false } = {}) {
+export function latestPaperEquitySnapshot(db) {
+  const row = db.prepare(`
+    SELECT id, source, currency, balance, equity, realized_pnl, unrealized_pnl, drawdown_pct, observed_at, details_json
+    FROM equity_snapshots WHERE accounting_status = 'VALID' ORDER BY observed_at DESC LIMIT 1
+  `).get();
+  return snapshotFromRow(row);
+}
+
+export function capturePaperEquitySnapshot(db, now = new Date(), { force = false, cachedSnapshot = null } = {}) {
   if (config.paperStartingEquity == null) return null;
+  const cachedAt = Date.parse(cachedSnapshot?.observedAt ?? '');
+  if (!force && cachedSnapshot?.source === 'PAPER_SIMULATION' && Number.isFinite(cachedAt)
+    && now.getTime() >= cachedAt && now.getTime() - cachedAt < SNAPSHOT_INTERVAL_MS) return cachedSnapshot;
   const latest = db.prepare("SELECT observed_at, accounting_status FROM equity_snapshots WHERE source = ? ORDER BY observed_at DESC LIMIT 1").get('PAPER_SIMULATION');
   const latestAt = Date.parse(latest?.observed_at ?? '');
   if (!force && latest?.accounting_status === 'VALID' && Number.isFinite(latestAt) && now.getTime() - latestAt < SNAPSHOT_INTERVAL_MS) return latestPaperEquitySnapshot(db);
@@ -50,14 +57,22 @@ export function capturePaperEquitySnapshot(db, now = new Date(), { force = false
   const peak = latestPeak(db, equity);
   const drawdownPct = peak > 0 ? Math.max(0, (peak - equity) / peak * 100) : null;
   const observedAt = now.toISOString();
+  const id = randomUUID();
+  const details = { startingEquity: config.paperStartingEquity, calculation: 'starting equity + persisted realized and unrealized paper PnL', liveTradingEnabled: false };
   db.prepare(`
     INSERT INTO equity_snapshots (
       id, source, currency, balance, equity, realized_pnl, unrealized_pnl, drawdown_pct, observed_at, details_json
     ) VALUES (?, 'PAPER_SIMULATION', ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    randomUUID(), config.paperCurrency, String(round(balance)), String(round(equity)), String(round(realizedPnl)), String(round(unrealizedPnl)),
+    id, config.paperCurrency, String(round(balance)), String(round(equity)), String(round(realizedPnl)), String(round(unrealizedPnl)),
     drawdownPct == null ? null : Number(drawdownPct.toFixed(8)), observedAt,
-    JSON.stringify({ startingEquity: config.paperStartingEquity, calculation: 'starting equity + persisted realized and unrealized paper PnL', liveTradingEnabled: false }),
+    JSON.stringify(details),
   );
-  return latestPaperEquitySnapshot(db);
+  return snapshotFromRow({
+    id, source: 'PAPER_SIMULATION', currency: config.paperCurrency,
+    balance: String(round(balance)), equity: String(round(equity)),
+    realized_pnl: String(round(realizedPnl)), unrealized_pnl: String(round(unrealizedPnl)),
+    drawdown_pct: drawdownPct == null ? null : Number(drawdownPct.toFixed(8)), observed_at: observedAt,
+    details_json: JSON.stringify(details),
+  });
 }

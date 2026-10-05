@@ -6,7 +6,7 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { appendAudit, openDatabase, readState, writeState } from '../src/database.mjs';
-import { initializeDatabase, createNexoraServer, validLocalHost, handleTelegramCommand, dashboardSnapshot, scanDiagnosticsSnapshot } from '../src/server.mjs';
+import { initializeDatabase, createNexoraServer, validLocalHost, handleTelegramCommand, dashboardSnapshot, scanDiagnosticsSnapshot, dataIntegritySnapshot } from '../src/server.mjs';
 import { PaperWorker } from '../src/worker.mjs';
 import { activeSessions } from '../src/domain/market-sessions.mjs';
 import { config, fingerprintConfiguration } from '../src/config.mjs';
@@ -112,6 +112,10 @@ test('scan diagnostics summarize persisted gate failures without exposing decisi
     assert.equal(diagnostics.nearMisses[0].alignedTimeframes, 2);
     assert.equal(diagnostics.nearMisses[0].deficits.score, 8);
     assert.equal(Object.hasOwn(diagnostics.nearMisses[0], 'decision_snapshot_json'), false);
+    const integrity = dataIntegritySnapshot(diagnosticDb, now);
+    assert.equal(integrity.status, 'CLEAN');
+    assert.equal(integrity.quarantine.trades, 0);
+    assert.equal(integrity.candles.unresolvedConflicts, 0);
   } finally {
     diagnosticDb.close();
   }
@@ -142,7 +146,7 @@ test('health separates process liveness from market readiness', async () => {
   assert.equal(body.buildId, config.buildId);
   assert.notEqual(body.buildId, 'LOCAL-UNVERSIONED');
   assert.match(body.buildId, /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/);
-  assert.equal(body.schemaVersion, 11);
+  assert.equal(body.schemaVersion, 12);
   assert.equal(body.controlActionsAvailable, true);
   assert.equal(body.worker.lastTick, null);
 });
@@ -1011,7 +1015,7 @@ test('SQLite state survives closing and reopening the database', () => {
   initializeDatabase(recoveredDb, new Date('2026-09-21T00:10:00.000Z'));
   assert.equal(readState(recoveredDb, 'entryPaused'), true);
   assert.equal(readState(recoveredDb, 'paperMode'), false);
-  assert.equal(recoveredDb.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get().n, 11);
+    assert.equal(recoveredDb.prepare('SELECT COUNT(*) AS n FROM schema_migrations').get().n, 12);
   recoveredDb.close();
   rmSync(directory, { recursive: true, force: true });
 });

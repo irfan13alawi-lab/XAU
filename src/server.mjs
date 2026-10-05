@@ -65,6 +65,7 @@ const OBSERVED_ROUTES = new Map([
   ['/api/scan/latest', 'scan.latest'],
   ['/api/lastscan', 'scan.latest'],
   ['/api/scan/diagnostics', 'scan.diagnostics'],
+  ['/api/integrity', 'integrity'],
   ['/api/actions/pause', 'action.pause'],
   ['/api/actions/resume', 'action.resume'],
   ['/api/actions/scan', 'action.scan'],
@@ -257,7 +258,8 @@ function workerTelemetrySnapshot(db, now, window = '1h') {
     SELECT observed_at, duration_ms, error_class,
       broker_health_attempted, broker_health_duration_ms, broker_health_status,
       market_data_attempted, market_data_duration_ms, market_data_status,
-      news_calendar_attempted, news_calendar_duration_ms, news_calendar_status
+      news_calendar_attempted, news_calendar_duration_ms, news_calendar_status,
+      health_ms, market_data_ms, news_ms, scan_ms, execution_ms, accounting_ms
     FROM worker_cycle_metrics
     WHERE observed_at >= ? AND observed_at <= ?
     ORDER BY observed_at DESC LIMIT ?
@@ -282,6 +284,21 @@ function workerTelemetrySnapshot(db, now, window = '1h') {
       p95: percentile(durations, 0.95),
       max: durations.length ? Number(Math.max(...durations).toFixed(1)) : null,
     },
+    stages: Object.fromEntries([
+      ['healthMs', 'health_ms'],
+      ['marketDataMs', 'market_data_ms'],
+      ['newsMs', 'news_ms'],
+      ['scanMs', 'scan_ms'],
+      ['executionMs', 'execution_ms'],
+      ['accountingMs', 'accounting_ms'],
+    ].map(([name, column]) => {
+      const stageDurations = rows.map((row) => row[column]).filter((value) => Number.isFinite(value) && value >= 0);
+      return [name, {
+        p50: percentile(stageDurations, 0.50),
+        p95: percentile(stageDurations, 0.95),
+        max: stageDurations.length ? Number(Math.max(...stageDurations).toFixed(1)) : null,
+      }];
+    })),
     dependencies: {
       brokerHealth: workerDependencySummary(rows, 'broker_health'),
       marketData: workerDependencySummary(rows, 'market_data'),
@@ -451,6 +468,50 @@ export function scanDiagnosticsSnapshot(db, now = new Date(), window = '24h') {
       minSignalScore: scoreThreshold,
       minConfluencePct: confluenceThreshold,
       minimumAlignedTimeframes: alignedThreshold,
+    },
+  };
+}
+
+export function dataIntegritySnapshot(db, now = new Date()) {
+  const from = new Date(now.getTime() - SCAN_DIAGNOSTIC_WINDOW_MS).toISOString();
+  const quarantinedTrades = db.prepare(`
+    SELECT COALESCE(accounting_reason, 'UNSPECIFIED') AS reason, COUNT(*) AS count
+    FROM trades WHERE accounting_status = 'QUARANTINED'
+    GROUP BY COALESCE(accounting_reason, 'UNSPECIFIED') ORDER BY count DESC LIMIT 10
+  `).all().map((row) => ({ reason: row.reason, count: Number(row.count) }));
+  const quarantinedEquitySnapshots = db.prepare(`
+    SELECT COALESCE(accounting_reason, 'UNSPECIFIED') AS reason, COUNT(*) AS count
+    FROM equity_snapshots WHERE accounting_status = 'QUARANTINED'
+    GROUP BY COALESCE(accounting_reason, 'UNSPECIFIED') ORDER BY count DESC LIMIT 10
+  `).all().map((row) => ({ reason: row.reason, count: Number(row.count) }));
+  const candleConflicts = db.prepare(`
+    SELECT symbol, timeframe, COUNT(*) AS count, MAX(closed_at) AS latestAt
+    FROM candles WHERE quality = 'CONFLICT'
+    GROUP BY symbol, timeframe ORDER BY count DESC, symbol, timeframe LIMIT 20
+  `).all().map((row) => ({ symbol: row.symbol, timeframe: row.timeframe, count: Number(row.count), latestAt: row.latestAt }));
+  const repairedLast24h = Number(db.prepare(`
+    SELECT COUNT(*) AS count FROM audit_events
+    WHERE event_type = 'MARKET_CANDLE_CONFLICT_REPAIRED' AND created_at >= ? AND created_at <= ?
+  `).get(from, now.toISOString())?.count ?? 0);
+  const quarantinedTradeCount = quarantinedTrades.reduce((sum, item) => sum + item.count, 0);
+  const quarantinedEquitySnapshotCount = quarantinedEquitySnapshots.reduce((sum, item) => sum + item.count, 0);
+  const unresolvedCandleConflictCount = candleConflicts.reduce((sum, item) => sum + item.count, 0);
+  return {
+    status: quarantinedTradeCount || quarantinedEquitySnapshotCount ? 'QUARANTINE_REVIEW'
+      : unresolvedCandleConflictCount ? 'CANDLE_CONFLICTS' : 'CLEAN',
+    window: '24h', from, until: now.toISOString(),
+    quarantine: {
+      trades: quarantinedTradeCount,
+      equitySnapshots: quarantinedEquitySnapshotCount,
+      tradeReasons: quarantinedTrades,
+      equitySnapshotReasons: quarantinedEquitySnapshots,
+      note: 'Quarantined evidence is retained and excluded from valid performance/equity calculations until reconciled.',
+    },
+    candles: {
+      unresolvedConflicts: unresolvedCandleConflictCount,
+      repairedLast24h,
+      conflicts: candleConflicts,
+      note: 'Conflict rows are fail-closed until a later settled provider candle replaces them.',
     },
   };
 }
@@ -769,6 +830,7 @@ export function dashboardSnapshot(db, now = new Date()) {
       };
     })() : null,
     scanDiagnostics: scanDiagnosticsSnapshot(db, now),
+    integrity: dataIntegritySnapshot(db, now),
     statistics,
   };
 }
@@ -1114,6 +1176,9 @@ export function createNexoraServer({ db, clock = () => new Date(), operatorToken
         const window = url.searchParams.get('window') ?? '24h';
         if (!['24h', '7d'].includes(window)) return jsonResponse(res, 400, { error: 'SCAN_DIAGNOSTIC_WINDOW_INVALID' });
         return jsonResponse(res, 200, scanDiagnosticsSnapshot(db, now, window));
+      }
+      if (method === 'GET' && url.pathname === '/api/integrity') {
+        return jsonResponse(res, 200, dataIntegritySnapshot(db, now));
       }
       if (method === 'GET' && url.pathname.startsWith('/api/')) {
         return jsonResponse(res, 404, { error: 'API route not found.' });
